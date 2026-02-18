@@ -29,11 +29,16 @@ graph TD
 Run the following command to install Goku globally on your system:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/elvisthebuilder/goku/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.sh | bash
 ```
 
 > [!NOTE]
 > Make sure `~/.local/bin` is in your `PATH`. If not, add `export PATH="$PATH:$HOME/.local/bin"` to your `.bashrc` or `.zshrc`.
+
+### 💻 Compatibility
+- **Linux**: Fully supported (Ubuntu, Debian, Termux, etc.)
+- **macOS**: Fully supported (Intel & Apple Silicon)
+- **Windows**: Supported via **WSL** (Windows Subsystem for Linux)
 
 ## ⌨️ How to Use
 
