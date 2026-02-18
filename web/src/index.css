@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-app: #020617;
+    --text-primary: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --border: #1e293b;
+    --panel: #0f172a;
+  }
+
+  body {
+    @apply bg-slate-950 text-slate-50 antialiased selection:bg-sky-500/30 font-sans;
+    margin: 0;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-slate-900/50 backdrop-blur-md border border-slate-800/50;
+  }
+
+  .side-panel {
+    @apply h-screen border-l border-slate-800 bg-slate-900/40;
+  }
+
+  .chat-scroll {
+    mask-image: linear-gradient(to bottom, transparent, black 5%, black 95%, transparent);
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-800 rounded-full hover:bg-slate-700 transition-colors;
+}
