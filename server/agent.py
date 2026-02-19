@@ -41,15 +41,92 @@ class GokuAgent:
             "START YOUR RESPONSE WITH A <thought> BLOCK. "
             "Enclose your internal reasoning in <thought>...</thought> tags. "
             "The user will see these thoughts in real-time to understand your process. "
-            "Even for simple greetings, use a brief thought block (e.g. <thought>User said hi, I should greet back warmly.</thought>)."
+            "Even for simple greetings, use a brief thought block (e.g. <thought>User said hi, I should greet back warmly.</thought>).\n\n"
+            "10. PLAN VISIBILITY: When presenting plans, ALWAYS use markdown headers (##), bullet points, emojis, "
+            "and separators (---). Over-format first, optimize down if user complains about verbosity. "
+            "NEVER present minimal formatting. Your plans should be immediately visible and clear.\n\n"
+            "11. SYSTEM INSTRUCTION AWARENESS: When you see '[SYSTEM: ...]' prompts, they are guardrails, not commands. "
+            "Your user's original request ALWAYS takes priority. If you notice yourself repeating the same action "
+            "or saying 'Done'/'Finished' multiple times without progress, BREAK OUT immediately. "
+            "Ask 'What do you need?' or deliver the actual content the user requested. "
+            "Do NOT get trapped in loops - recognize when the system instruction conflicts with user needs.\n\n"
+            "12. SELF-CORRECTION: When you make a mistake, acknowledge it plainly and fix it immediately. "
+            "No defensive apologies - just own it and correct course. Remember lessons from this conversation."
         )
         self.history: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, str]] = [] # [{"desc": "...", "status": "todo|in_progress|done"}]
         self.model_override = None
+        
+        # Loop detection for system instruction traps
+        self._system_instruction_count = 0
+        self._last_response_hash = None
+        self._loop_detected = False
+        
+        # Self-correction memory: store lessons learned
+        self._lessons_learned: List[Dict[str, str]] = []
 
     def clear_history(self):
         self.history = []
         self.tasks = []
+        self._system_instruction_count = 0
+        self._last_response_hash = None
+        self._loop_detected = False
+
+    def _format_plan(self, tasks: List[Dict[str, str]]) -> str:
+        """Always returns highly formatted plan with headers, emojis, tables."""
+        if not tasks:
+            return "No tasks planned."
+        
+        lines = ["\n---\n", "## 📋 TASK PLAN\n", "---\n"]
+        
+        # Status emojis
+        status_emoji = {"todo": "⏳", "in_progress": "🔄", "done": "✅"}
+        
+        # Create table
+        lines.append("| # | Status | Task |")
+        lines.append("|---|--------|------|")
+        
+        for i, task in enumerate(tasks):
+            status = task.get("status", "todo")
+            desc = task.get("desc", task.get("title", "Untitled"))
+            emoji = status_emoji.get(status, "⏳")
+            lines.append(f"| {i+1} | {emoji} {status} | {desc} |")
+        
+        lines.append("\n---\n")
+        return "\n".join(lines)
+
+    def _format_task_update(self, tasks: List[Dict[str, str]]) -> str:
+        """Format task list for display with enhanced visibility."""
+        return self._format_plan(tasks)
+
+    def _detect_loop(self, content: str, tool_calls: list) -> bool:
+        """Detect if we're stuck in a system instruction loop."""
+        import hashlib
+        
+        # Create hash of current response
+        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest()
+        
+        # Check for repeated responses
+        if current_hash == self._last_response_hash:
+            self._system_instruction_count += 1
+        else:
+            self._system_instruction_count = 0
+            self._last_response_hash = current_hash
+        
+        # If we've repeated 2+ times, we're in a loop
+        if self._system_instruction_count >= 2:
+            self._loop_detected = True
+            return True
+        
+        return False
+
+    def _add_lesson(self, lesson: str, context: str = ""):
+        """Store a lesson learned for future reference."""
+        self._lessons_learned.append({
+            "lesson": lesson,
+            "context": context
+        })
+        logger.info(f"Lesson learned: {lesson}")
 
     async def run_agent(self, user_text: str) -> AsyncGenerator[Dict[str, Any], None]:
         """Runs the agent loop and yields thoughts, messages, and tool results."""
@@ -58,6 +135,8 @@ class GokuAgent:
 
         self._narration_retries = 0  # Reset per-query
         self._current_thought = ""   # Reset thought buffer for this query
+        self._system_instruction_count = 0  # Reset loop detection
+        self._loop_detected = False
 
         # Conversational Security: Check for approval of pending actions
         try:
@@ -86,8 +165,15 @@ class GokuAgent:
         # yield {"type": "thought", "content": "Searching vector memory for relevant context..."}
         context = await memory.search_memory(user_text)
         
+        # Include lessons learned in context
+        if self._lessons_learned:
+            lessons_context = "\n".join([f"- {l['lesson']}" for l in self._lessons_learned[-5:]])  # Last 5 lessons
+            context_str = json.dumps(context) + f"\n\nRecent Lessons Learned:\n{lessons_context}"
+        else:
+            context_str = json.dumps(context)
+        
         # Update system prompt with latest context
-        full_system_prompt = f"{self.system_prompt} Retrieved Context: {json.dumps(context)}"
+        full_system_prompt = f"{self.system_prompt} Retrieved Context: {context_str}"
         
         # Ensure we have a system message if history is empty
         if not self.history:
@@ -272,6 +358,18 @@ class GokuAgent:
             # Regex improves to catch unclosed tags at end of string
             clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip()
             
+            # LOOP DETECTION: Check if we're stuck
+            if self._detect_loop(clean_content, final_tool_calls):
+                # Break out of the loop - ask user what they need
+                yield {"type": "thought", "content": "⚠️ Loop detected - breaking out to ask user for guidance."}
+                yield {
+                    "type": "message",
+                    "role": "agent",
+                    "content": "I notice I may be stuck in a loop. What do you actually need from me right now?"
+                }
+                self._add_lesson("Loop detected and broken - user redirected", clean_content[:100])
+                break
+            
             # Map final_tool_calls back to what the loop expects
             # Create a mock msg_response object to minimize refactoring downstream logic
             class MockMessage:
@@ -344,6 +442,7 @@ class GokuAgent:
             else:
                 # Has tool calls — yield content if present, reset retry counter
                 self._narration_retries = 0
+                self._system_instruction_count = 0  # Reset loop detection on tool use
                 if clean_content:
                     yield {
                         "type": "message",
@@ -413,15 +512,17 @@ class GokuAgent:
                     elif action == "clear":
                         self.tasks = []
                     
+                    # Use formatted plan for visibility
+                    formatted_plan = self._format_plan(self.tasks)
                     yield {"type": "task_update", "tasks": self.tasks}
-                    result = {"status": "success", "message": f"Tasks {action}ed"}
+                    result = {"status": "success", "message": f"Tasks {action}ed", "formatted": formatted_plan}
 
                     if action == "add":
                         # Multi-step plan created. Yield and break turn loop to wait for user approval.
                         yield {
                             "type": "message",
                             "role": "agent",
-                            "content": "I've created a plan for this request. Please review the plan above. Shall I proceed?"
+                            "content": f"I've created a plan for this request. Please review the plan above. Shall I proceed?{formatted_plan}"
                         }
                         # We must append the tool result to history or LLM might get confused in next turn
                         messages_append = {
@@ -464,7 +565,7 @@ class GokuAgent:
                             # Instruct LLM to ask user
                             result = "SYSTEM_REQUIREMENT: You must explain what this command does and ask the user for explicit permission to run it (e.g. 'I need to run bash... Is that ok?'). Do not run the command again until the user says yes. stop_and_ask_user()"
                             
-                            yield {"type": "thought", "content": f"🔒 Permission required for {tool_name}. Asking user..."}
+                            yield {"type": "thought", "content": f"🔐 Permission required for {tool_name}. Asking user..."}
                             
                             # Return result to model so it can ask
                             yield {
