@@ -138,7 +138,7 @@ class GokuAgent:
             }
         })
 
-        max_turns = 10 
+        max_turns = 50 
         for turn in range(max_turns):
             if turn == 0:
                 yield {"type": "thought", "content": "..."}
@@ -316,7 +316,8 @@ class GokuAgent:
                 else:
                     # Mid-execution: is this a permission question or just progress narration?
                     has_pending_permission = hasattr(self, "pending_hashes") and self.pending_hashes
-                    is_question = "?" in clean_content and len(clean_content) < 200 # Heuristic for a short question
+                    # Smarter question check: must end with ? or be a short prompt with ?
+                    is_question = "?" in clean_content.strip()[-5:] and len(clean_content) < 200
                     
                     if has_pending_permission or is_question:
                         # Legitimate question or permission request — let the user respond
@@ -343,7 +344,7 @@ class GokuAgent:
                         yield {
                             "type": "message",
                             "role": "agent",
-                            "content": content
+                            "content": clean_content
                         }
                         break
                     
@@ -364,7 +365,8 @@ class GokuAgent:
                     }
                 
                 # If there's a question, stop and wait for answer BEFORE running tools
-                is_question = "?" in clean_content and len(clean_content) < 400
+                # Refined: Only if it's a short question or ends with ?
+                is_question = "?" in clean_content.strip()[-5:] and len(clean_content) < 400
                 if is_question:
                     # Append a hint to history so the model knows it's waiting
                     self.history.append({
