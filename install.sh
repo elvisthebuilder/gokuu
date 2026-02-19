@@ -126,7 +126,41 @@ mkdir -p "$BIN_DIR"
 chmod +x "$GOKU_DIR/goku.sh"
 ln -sf "$GOKU_DIR/goku.sh" "$BIN_DIR/goku"
 
-# 7. Final Instructions
+# 7. Path Configuration
+echo "🔧 Configuring PATH..."
+SHELL_CONFIG=""
+case "$SHELL" in
+    */zsh)
+        SHELL_CONFIG="$HOME/.zshrc"
+        ;;
+    */bash)
+        SHELL_CONFIG="$HOME/.bashrc"
+        ;;
+    *)
+        # Fallback to bashrc if unknown or other
+        if [ -f "$HOME/.bashrc" ]; then
+            SHELL_CONFIG="$HOME/.bashrc"
+        elif [ -f "$HOME/.zshrc" ]; then
+             SHELL_CONFIG="$HOME/.zshrc"
+        fi
+        ;;
+esac
+
+if [ -n "$SHELL_CONFIG" ]; then
+    EXPORT_CMD="export PATH=\"\$PATH:$BIN_DIR\""
+    if grep -q "$BIN_DIR" "$SHELL_CONFIG"; then
+        echo "✅ PATH already configured in $SHELL_CONFIG"
+    else
+        echo "➕ Adding $BIN_DIR to PATH in $SHELL_CONFIG"
+        echo "" >> "$SHELL_CONFIG"
+        echo "# Goku AI Agent" >> "$SHELL_CONFIG"
+        echo "$EXPORT_CMD" >> "$SHELL_CONFIG"
+    fi
+else
+    echo "⚠️  Could not detect shell configuration file. Please manually add '$BIN_DIR' to your PATH."
+fi
+
+# 8. Final Instructions
 echo ""
 echo "--------------------------------------------------------"
 echo "✅ Goku AI Agent installed successfully!"
@@ -135,7 +169,11 @@ echo "Commands:"
 echo "  goku cli    - Launch interactive terminal agent"
 echo "  goku web    - Launch high-fidelity web dashboard"
 echo ""
-echo "Ensure '$BIN_DIR' is in your PATH."
-echo "If not, add 'export PATH=\$PATH:$BIN_DIR' to your .bashrc/.zshrc"
+if [ -n "$SHELL_CONFIG" ]; then
+    echo "🔄 Please run 'source $SHELL_CONFIG' or restart your terminal to use the 'goku' command."
+else
+    echo "Ensure '$BIN_DIR' is in your PATH."
+    echo "If not, add 'export PATH=\$PATH:$BIN_DIR' to your .bashrc/.zshrc"
+fi
 echo "--------------------------------------------------------"
 echo "🐉 Happy building with Goku!"
