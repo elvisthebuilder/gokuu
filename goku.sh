@@ -43,6 +43,33 @@ case "$1" in
         # Keep script running to manage process
         wait $BACKEND_PID
         ;;
+    update)
+        shift
+        echo "⬇️  Checking for updates..."
+        cd "$SCRIPT_DIR"
+        
+        # Check if git is available
+        if ! command -v git &> /dev/null; then
+            echo "❌ Git is required for updates but not installed."
+            exit 1
+        fi
+
+        # Check if it's a git repo
+        if [ ! -d ".git" ]; then
+            echo "❌ This installation is not a git repository. Cannot update automatically."
+            exit 1
+        fi
+
+        # Pull latest changes
+        if git pull | grep -q "Already up to date"; then
+             echo "✅ Goku is already up to date!"
+        else
+             echo "🚀 Update found! Re-running installer..."
+             # Make sure install.sh is executable
+             chmod +x ./install.sh
+             ./install.sh
+        fi
+        ;;
     *)
         echo "Usage: goku [cli|web]"
         echo ""
