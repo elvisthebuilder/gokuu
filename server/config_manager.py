@@ -3,8 +3,13 @@ from dotenv import load_dotenv
 from typing import Optional, Dict
 
 class ConfigManager:
-    def __init__(self, env_path=".env"):
-        self.env_path = env_path
+    def __init__(self, env_path=None):
+        if env_path:
+            self.env_path = env_path
+        else:
+            # Default to .env in the package root (parent of server/)
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.env_path = os.path.join(base_dir, ".env")
 
     def set_key(self, key: str, value: str):
         """Update or add a key in the .env file."""

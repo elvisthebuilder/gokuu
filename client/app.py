@@ -150,8 +150,9 @@ async def run_chat(query: str):
                     # Render task list in a side panel or dedicated area
                     task_text = ""
                     for i, t in enumerate(event["tasks"]):
-                        marker = "[green]✓[/]" if t["status"] == "done" else "[blue]>[/]" if t["status"] == "in_progress" else "[dim]•[/]"
-                        task_text += f"{marker} {t['desc']}\n"
+                        marker = "[green]✓[/]" if t.get("status") == "done" else "[blue]>[/]" if t.get("status") == "in_progress" else "[dim]•[/]"
+                        desc = t.get("desc") or t.get("description") or t.get("task") or t.get("content") or "Unknown task"
+                        task_text += f"{marker} {desc}\n"
                     
                     live.stop()
                     console.print(Panel(task_text.strip(), title="📋 GOKU'S PLAN", border_style="cyan", title_align="left"))
