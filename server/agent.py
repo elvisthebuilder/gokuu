@@ -57,6 +57,7 @@ class GokuAgent:
             return
 
         self._narration_retries = 0  # Reset per-query
+        self._current_thought = ""   # Reset thought buffer for this query
 
         # Conversational Security: Check for approval of pending actions
         try:
@@ -160,7 +161,6 @@ class GokuAgent:
             
             # Rolling Buffer Parser
             import re
-            thought_buffer = ""
             
             async for chunk in response_stream:
                 if not chunk.choices: continue
@@ -168,8 +168,8 @@ class GokuAgent:
                 
                 # 1. Handle Native Thinking (Ollama think=True)
                 if hasattr(delta, "thinking") and delta.thinking:
-                    thought_buffer += delta.thinking
-                    yield {"type": "thought", "content": thought_buffer}
+                    self._current_thought += delta.thinking
+                    yield {"type": "thought", "content": self._current_thought}
 
                 # 2. Handle Text Content with <thought> tags
                 if delta.content:
@@ -177,7 +177,6 @@ class GokuAgent:
                     full_content += text_chunk
                     
                     # Regex to find all thought blocks
-                    # We use a pattern that handles unclosed tags at the end of the string
                     pattern = r'<(thought|think)>(.*?)(?:</\1>|$)'
                     matches = list(re.finditer(pattern, full_content, re.DOTALL))
                     
@@ -187,27 +186,25 @@ class GokuAgent:
                         is_closed = f"</{last_match.group(1)}>" in full_content[last_match.start():]
                         
                         # Current thinking is the content of the last tag
-                        current_thought = last_match.group(2)
-                        # Remove any literal tags if they leaked into the group
-                        current_thought = re.sub(r'</?(thought|think)>', '', current_thought)
+                        raw_thought = last_match.group(2)
                         
-                        if not is_closed:
-                            # Still thinking
-                            yield {"type": "thought", "content": current_thought}
-                        else:
-                            # Just finished thinking or in message mode
-                            # Extract any text AFTER the last closing tag
-                            message_text = full_content[last_match.end():]
-                            if message_text:
-                                yield {"type": "message", "role": "agent", "content": message_text}
+                        # SCRUBBER: Remove partial or full tags that leak into the buffer
+                        # This prevents showing "</thou" or "<thought>" inside the thinking panel
+                        scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', raw_thought, flags=re.IGNORECASE).strip()
+                        
+                        if scrubbed_thought:
+                            self._current_thought = scrubbed_thought
+                            yield {"type": "thought", "content": self._current_thought}
+                        
+                        if is_closed:
+                            # If tag is closed, message content might be starting
+                            # But we don't yield 'message' events inside the loop to prevent flickering
+                            pass
                     else:
-                        # No tags found yet - either just message or tag hasn't started
-                        # If we see a partial tag start, wait for more. Otherwise yield as message.
-                        if "<" in full_content and not any(tag in full_content for tag in ["<thought", "<think"]):
-                             # Might be a split tag or legitimate <. For now, yield if not obviously a tag start.
-                             yield {"type": "message", "role": "agent", "content": full_content}
-                        elif "<" not in full_content:
-                             yield {"type": "message", "role": "agent", "content": full_content}
+                        # No tags found, everything is potentially message content
+                        # We don't yield deltas here to keep the UI clean; 
+                        # the turn-end logic will yield the final message.
+                        pass
                 
                 # 2. Handle Tool Calls (Accumulate parts)
                 if delta.tool_calls:
