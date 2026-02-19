@@ -417,7 +417,7 @@ class LiteRouter:
                                 'type': 'function',
                                 'function': type('func', (), {
                                     'name': func.get('name'),
-                                    'arguments': json.dumps(func.get('arguments', {}))
+                                    'arguments': func.get('arguments') if isinstance(func.get('arguments'), str) else json.dumps(func.get('arguments', {}))
                                 })()
                             })()
                             converted_tools.append(tool_obj)

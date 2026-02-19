@@ -356,11 +356,11 @@ class GokuAgent:
             else:
                 # Has tool calls — yield content if present, reset retry counter
                 self._narration_retries = 0
-                if content:
+                if clean_content:
                     yield {
                         "type": "message",
                         "role": "agent",
-                        "content": content
+                        "content": clean_content
                     }
 
             # Prep for tool processing: Prioritize planning.
@@ -374,7 +374,19 @@ class GokuAgent:
 
             for tool_call in active_tool_calls:
                 tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+                
+                # Robust argument parsing
+                try:
+                    raw_args = tool_call.function.arguments
+                    tool_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    # If it's still a string after one jump (double encoded), jump again
+                    if isinstance(tool_args, str):
+                        tool_args = json.loads(tool_args)
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                except Exception as e:
+                    logger.error(f"Failed to parse tool args: {e}")
+                    tool_args = {}
 
                 if tool_name == "manage_tasks":
                     action = tool_args.get("action")
@@ -384,7 +396,7 @@ class GokuAgent:
                     elif action == "update":
                         idx = tool_args.get("index")
                         status = tool_args.get("status")
-                        if 0 <= idx < len(self.tasks):
+                        if isinstance(idx, int) and 0 <= idx < len(self.tasks):
                             self.tasks[idx]["status"] = status
                     elif action == "clear":
                         self.tasks = []
