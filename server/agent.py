@@ -160,6 +160,7 @@ class GokuAgent:
             
             # Rolling Buffer Parser
             import re
+            thought_buffer = ""
             
             async for chunk in response_stream:
                 if not chunk.choices: continue
