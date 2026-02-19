@@ -362,12 +362,35 @@ class GokuAgent:
                         "role": "agent",
                         "content": clean_content
                     }
+                
+                # If there's a question, stop and wait for answer BEFORE running tools
+                is_question = "?" in clean_content and len(clean_content) < 400
+                if is_question:
+                    # Append a hint to history so the model knows it's waiting
+                    self.history.append({
+                        "role": "user", 
+                        "content": "[SYSTEM: Waiting for user response to the above question before proceeding with tools.]"
+                    })
+                    break
 
             # Prep for tool processing: Prioritize planning.
             # If the model sends multiple tools (e.g. bash + manage_tasks), we MUST
             # execute the plan first and ignore the others to wait for approval.
             tool_calls = msg_response.tool_calls
-            planning_call = next((tc for tc in tool_calls if tc.function.name == "manage_tasks" and json.loads(tc.function.arguments).get("action") == "add"), None)
+            
+            def get_tool_action(tc):
+                try:
+                    args = tc.function.arguments
+                    if isinstance(args, str):
+                        data = json.loads(args)
+                        if isinstance(data, str): # Double encoded
+                            data = json.loads(data)
+                        return data.get("action")
+                    return args.get("action")
+                except:
+                    return None
+
+            planning_call = next((tc for tc in tool_calls if tc.function.name == "manage_tasks" and get_tool_action(tc) == "add"), None)
             
             # If we are planning, only process the planning call and stop.
             active_tool_calls = [planning_call] if planning_call else tool_calls
