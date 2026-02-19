@@ -38,9 +38,10 @@ class GokuAgent:
             "built-in search tools (prefixed with 'mcp_search__') FIRST. These are your configured search providers "
             "(DuckDuckGo, Brave, Google). Only fall back to bash with curl if the search tools fail or are unavailable.\n"
             "9. THOUGHT PROCESS: You MUST think step-by-step before answering or taking action. "
+            "START YOUR RESPONSE WITH A <thought> BLOCK. "
             "Enclose your internal reasoning in <thought>...</thought> tags. "
             "The user will see these thoughts in real-time to understand your process. "
-            "Keep thoughts concise and focused on the immediate next step."
+            "Even for simple greetings, use a brief thought block (e.g. <thought>User said hi, I should greet back warmly.</thought>)."
         )
         self.history: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, str]] = [] # [{"desc": "...", "status": "todo|in_progress|done"}]
@@ -104,6 +105,8 @@ class GokuAgent:
         # yield {"type": "thought", "content": "Routing to best model (Hybrid Online/Offline)..."}
 
         # 3. Execution Loop
+        yield {"type": "thought", "content": "..."}
+        
         llm_tools = [
             {"type": t["type"], "function": t["function"]} 
             for t in all_tools if "type" in t and "function" in t
@@ -170,14 +173,18 @@ class GokuAgent:
                     full_content += text_chunk
                     
                     # Robust State Machine for Tags
-                    # Handle split tags like "<tho" + "ught>" by checking buffer end
+                    # Support both <thought> (our prompt) and <think> (DeepSeek/Ollama native)
                     
                     combined = thought_buffer + text_chunk if inside_thought else text_chunk
                     
-                    # Check for opening tag
-                    if not inside_thought and "<thought>" in text_chunk:
+                    # Check for opening tags
+                    start_tag = None
+                    if "<thought>" in text_chunk: start_tag = "<thought>"
+                    elif "<think>" in text_chunk: start_tag = "<think>"
+                    
+                    if not inside_thought and start_tag:
                         inside_thought = True
-                        pre, post = text_chunk.split("<thought>", 1)
+                        pre, post = text_chunk.split(start_tag, 1)
                         # pre is message content, post is thought start
                         if pre:
                              # We could yield message here if we supported it
@@ -185,12 +192,14 @@ class GokuAgent:
                         thought_buffer = post
                         text_chunk = "" # Consumed
                         
-                    # Check for closing tag
-                    if inside_thought and "</thought>" in combined:
+                    # Check for closing tags
+                    end_tag = None
+                    if "</thought>" in combined: end_tag = "</thought>"
+                    elif "</think>" in combined: end_tag = "</think>"
+                    
+                    if inside_thought and end_tag and end_tag in combined:
                         inside_thought = False
-                        # If the tag was split across chunks, we need to be careful
-                        # Simplest approach: find tag in combined buffer
-                        pre, post = combined.split("</thought>", 1)
+                        pre, post = combined.split(end_tag, 1)
                         
                         # Yield the final thought content
                         if pre:
@@ -208,12 +217,6 @@ class GokuAgent:
                             thought_buffer += text_chunk
                             yield {"type": "thought", "content": thought_buffer}
                     else:
-                        # Outside thought = final message content
-                        # If the model is NOT using thoughts (e.g. didn't follow prompt), 
-                        # we currently don't show anything in "Thinking".
-                        # To fix "Not a thought, it was a respond" complaints, we should detect if
-                        # NO thoughts have occurred after X tokens and maybe yield generic "Thinking..."
-                        # OR just accept that if no thoughts, no thinking card updates.
                         pass
                 
                 # 2. Handle Tool Calls (Accumulate parts)
