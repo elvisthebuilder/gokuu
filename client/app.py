@@ -127,24 +127,32 @@ async def run_chat(query: str):
     with Live(console=console, refresh_per_second=10) as live:
         # Inject live context into confirmation callback so it can pause updates
         confirm_execution.live_ctx = live
+        
+        last_thought = ""
         try:
             async for event in agent.run_agent(query):
-                if event["type"] == "thought":
+                if event["type"] == "thought" and event["content"]:
                     if not live.is_started: live.start()
-                    thought_spinner = Spinner("dots", text=Text(event['content'], style="dim"), style="cyan")
+                    last_thought = event['content']
+                    thought_spinner = Spinner("dots", text=Text(last_thought, style="dim"), style="cyan")
                     live.update(Panel(thought_spinner, title="💭 Thinking", border_style="dim", title_align="left"))
                 
                 elif event["type"] == "message":
                     live.stop()
                     console.print(Panel(Markdown(event["content"]), title="[bold green]GOKU[/bold green]", border_style="green", title_align="left"))
-                    # Don't restart Live immediately if we want to show the message cleanly
-                    # The next event (thought or tool) will restart it if needed
-                    # live.start()
                 
                 elif event["type"] == "tool_call":
-                    live.start() # Ensure live is running
+                    if not live.is_started: live.start()
+                    # Show both thought and execution
+                    content = []
+                    if last_thought:
+                        content.append(Panel(Text(last_thought, style="dim"), title="💭 Thoughts", border_style="dim"))
+                    
                     exec_spinner = Spinner("dots", text=Text.from_markup(f" Executing: [bold yellow]{event['name']}[/bold yellow]"), style="yellow")
-                    live.update(Panel(exec_spinner, title="🛠️  Executing", subtitle=f"[dim]{event['name']}[/dim]", border_style="yellow", title_align="left", subtitle_align="right"))
+                    content.append(Panel(exec_spinner, title="🛠️  Executing", border_style="yellow"))
+                    
+                    from rich.console import Group
+                    live.update(Group(*content))
                 
                 elif event["type"] == "task_update":
                     # Render task list in a side panel or dedicated area
@@ -154,13 +162,14 @@ async def run_chat(query: str):
                         desc = t.get("desc") or t.get("description") or t.get("task") or t.get("content") or "Unknown task"
                         task_text += f"{marker} {desc}\n"
                     
+                    # We print the plan so it stays in history, but we don't stop Live if we don't have to
+                    # Actually console.print in the middle of Live might be messy.
                     live.stop()
                     console.print(Panel(task_text.strip(), title="📋 GOKU'S PLAN", border_style="cyan", title_align="left"))
                     live.start()
                 
                 elif event["type"] == "tool_result":
-                    # Tool results are usually handled internally by agent, 
-                    # but we could show them if they are too big/important.
+                    # Optionally show a quick success/fail indicator if not planning
                     pass
         except Exception as e:
             live.stop()

@@ -105,8 +105,6 @@ class GokuAgent:
         # yield {"type": "thought", "content": "Routing to best model (Hybrid Online/Offline)..."}
 
         # 3. Execution Loop
-        yield {"type": "thought", "content": "..."}
-        
         llm_tools = [
             {"type": t["type"], "function": t["function"]} 
             for t in all_tools if "type" in t and "function" in t
@@ -142,6 +140,8 @@ class GokuAgent:
 
         max_turns = 10 
         for turn in range(max_turns):
+            if turn == 0:
+                yield {"type": "thought", "content": "..."}
             try:
                 response_stream = await router.get_response(
                     model=self.model_override or "default",
@@ -442,6 +442,13 @@ class GokuAgent:
                             "content": json.dumps(result)
                         }
                         self.history.append(messages_append)
+                        
+                        # Yield the result to UI as well
+                        yield {
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "content": result
+                        }
                         return # Exit the entire run_agent loop to force user interaction
                 else:
                     yield {"type": "thought", "content": f"Executing process: {tool_name}..."}
