@@ -280,6 +280,10 @@ class GokuAgent:
             self.history.append(msg_dict)
             content = full_content
             
+            # clean_content for UI display (strip thoughts)
+            import re
+            clean_content = re.sub(r'<(thought|think)>.*?</\1>', '', full_content, flags=re.DOTALL).strip()
+            
             # Map final_tool_calls back to what the loop expects
             # Create a mock msg_response object to minimize refactoring downstream logic
             class MockMessage:
@@ -287,17 +291,17 @@ class GokuAgent:
                       self.content = content
                       self.tool_calls = tool_calls
             
-            msg_response = MockMessage(content, final_tool_calls)
+            msg_response = MockMessage(clean_content, final_tool_calls)
 
             if not msg_response.tool_calls:
                 # No tool calls — is this a final answer or mid-execution narration?
-                if turn == 0 or not content:
+                if turn == 0 or not clean_content:
                     # First turn or empty response — this is a final answer
-                    if content:
+                    if clean_content:
                         yield {
                             "type": "message",
                             "role": "agent",
-                            "content": content
+                            "content": clean_content
                         }
                     elif turn == 0:
                         # Only show the "empty response" error if it happens on the very first turn
