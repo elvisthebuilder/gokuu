@@ -158,66 +158,55 @@ class GokuAgent:
             full_content = ""
             tool_calls_accumulator = {} # index -> tool_call object
             
-            # State tracking for thought parsing
-            inside_thought = False
-            thought_buffer = ""
+            # Rolling Buffer Parser
+            import re
             
             async for chunk in response_stream:
                 if not chunk.choices: continue
-                
                 delta = chunk.choices[0].delta
                 
-                # 1. Handle Text Content with <thought> parsing
+                # 1. Handle Native Thinking (Ollama think=True)
                 if hasattr(delta, "thinking") and delta.thinking:
                     thought_buffer += delta.thinking
                     yield {"type": "thought", "content": thought_buffer}
 
+                # 2. Handle Text Content with <thought> tags
                 if delta.content:
                     text_chunk = delta.content
                     full_content += text_chunk
                     
-                    # Robust State Machine for Tags
-                    # Support both <thought> (our prompt) and <think> (DeepSeek/Ollama native)
+                    # Regex to find all thought blocks
+                    # We use a pattern that handles unclosed tags at the end of the string
+                    pattern = r'<(thought|think)>(.*?)(?:</\1>|$)'
+                    matches = list(re.finditer(pattern, full_content, re.DOTALL))
                     
-                    combined = thought_buffer + text_chunk if inside_thought else text_chunk
-                    
-                    # Check for opening tags
-                    start_tag = None
-                    if "<thought>" in text_chunk: start_tag = "<thought>"
-                    elif "<think>" in text_chunk: start_tag = "<think>"
-                    
-                    if not inside_thought and start_tag:
-                        inside_thought = True
-                        pre, post = text_chunk.split(start_tag, 1)
-                        # pre is message content, post is thought start
-                        thought_buffer = post
-                        text_chunk = "" # Consumed
+                    if matches:
+                        last_match = matches[-1]
+                        # Is the last tag closed?
+                        is_closed = f"</{last_match.group(1)}>" in full_content[last_match.start():]
                         
-                    # Check for closing tags
-                    end_tag = None
-                    if "</thought>" in combined: end_tag = "</thought>"
-                    elif "</think>" in combined: end_tag = "</think>"
-                    
-                    if inside_thought and end_tag and end_tag in combined:
-                        inside_thought = False
-                        pre, post = combined.split(end_tag, 1)
+                        # Current thinking is the content of the last tag
+                        current_thought = last_match.group(2)
+                        # Remove any literal tags if they leaked into the group
+                        current_thought = re.sub(r'</?(thought|think)>', '', current_thought)
                         
-                        # Yield the final thought content
-                        if pre:
-                            yield {"type": "thought", "content": pre}
-                        
-                        thought_buffer = ""
-                        # post is message content
-                        text_chunk = post
-                        # combined is consumed
-                    
-                    if inside_thought:
-                        # Append new chunk to buffer and yield
-                        if text_chunk:
-                            thought_buffer += text_chunk
-                            yield {"type": "thought", "content": thought_buffer}
+                        if not is_closed:
+                            # Still thinking
+                            yield {"type": "thought", "content": current_thought}
+                        else:
+                            # Just finished thinking or in message mode
+                            # Extract any text AFTER the last closing tag
+                            message_text = full_content[last_match.end():]
+                            if message_text:
+                                yield {"type": "message", "role": "agent", "content": message_text}
                     else:
-                        pass
+                        # No tags found yet - either just message or tag hasn't started
+                        # If we see a partial tag start, wait for more. Otherwise yield as message.
+                        if "<" in full_content and not any(tag in full_content for tag in ["<thought", "<think"]):
+                             # Might be a split tag or legitimate <. For now, yield if not obviously a tag start.
+                             yield {"type": "message", "role": "agent", "content": full_content}
+                        elif "<" not in full_content:
+                             yield {"type": "message", "role": "agent", "content": full_content}
                 
                 # 2. Handle Tool Calls (Accumulate parts)
                 if delta.tool_calls:
