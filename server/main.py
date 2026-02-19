@@ -1,4 +1,8 @@
 import os
+import sys
+
+# Add the project root to sys.path to allow imports like 'from server.xxx'
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
