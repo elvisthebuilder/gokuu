@@ -362,7 +362,8 @@ class LiteRouter:
             "model": model_name,
             "messages": ollama_messages,
             "stream": True,
-            "options": {"num_ctx": 65536}
+            "options": {"num_ctx": 65536},
+            "think": True # Enable native thinking for supporting models
         }
         if tools:
             body["tools"] = tools
@@ -382,14 +383,17 @@ class LiteRouter:
                     except:
                         continue
                         
-                    content = chunk.get("message", {}).get("content", "")
-                    tool_calls_raw = chunk.get("message", {}).get("tool_calls", [])
+                    msg = chunk.get("message", {})
+                    content = msg.get("content", "")
+                    thinking = msg.get("thinking", "") # Capture native thinking field
+                    tool_calls_raw = msg.get("tool_calls", [])
                     done = chunk.get("done", False)
                     
                     # Convert to litellm-style delta object
                     class Delta:
-                        def __init__(self, content, tool_calls, role):
+                        def __init__(self, content, thinking, tool_calls, role):
                             self.content = content
+                            self.thinking = thinking
                             self.tool_calls = tool_calls
                             self.role = role
 
@@ -422,7 +426,7 @@ class LiteRouter:
                     if converted_tools:
                          finish_reason = "tool_calls" if done else None
 
-                    yield Chunk(Choice(Delta(content, converted_tools or None, "assistant"), finish_reason))
+                    yield Chunk(Choice(Delta(content, thinking, converted_tools or None, "assistant"), finish_reason))
 
     async def get_response(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, stream: bool = True) -> Any:
         try:

@@ -168,6 +168,10 @@ class GokuAgent:
                 delta = chunk.choices[0].delta
                 
                 # 1. Handle Text Content with <thought> parsing
+                if hasattr(delta, "thinking") and delta.thinking:
+                    thought_buffer += delta.thinking
+                    yield {"type": "thought", "content": thought_buffer}
+
                 if delta.content:
                     text_chunk = delta.content
                     full_content += text_chunk
@@ -186,9 +190,6 @@ class GokuAgent:
                         inside_thought = True
                         pre, post = text_chunk.split(start_tag, 1)
                         # pre is message content, post is thought start
-                        if pre:
-                             # We could yield message here if we supported it
-                             pass
                         thought_buffer = post
                         text_chunk = "" # Consumed
                         
@@ -212,7 +213,6 @@ class GokuAgent:
                     
                     if inside_thought:
                         # Append new chunk to buffer and yield
-                        # Note: if we just entered thought, text_chunk was cleared or set to post
                         if text_chunk:
                             thought_buffer += text_chunk
                             yield {"type": "thought", "content": thought_buffer}
@@ -282,7 +282,8 @@ class GokuAgent:
             
             # clean_content for UI display (strip thoughts)
             import re
-            clean_content = re.sub(r'<(thought|think)>.*?</\1>', '', full_content, flags=re.DOTALL).strip()
+            # Regex improves to catch unclosed tags at end of string
+            clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip()
             
             # Map final_tool_calls back to what the loop expects
             # Create a mock msg_response object to minimize refactoring downstream logic
@@ -315,23 +316,25 @@ class GokuAgent:
                 else:
                     # Mid-execution: is this a permission question or just progress narration?
                     has_pending_permission = hasattr(self, "pending_hashes") and self.pending_hashes
-                    is_question = "?" in content and len(content) < 200 # Heuristic for a short question
+                    is_question = "?" in clean_content and len(clean_content) < 200 # Heuristic for a short question
                     
                     if has_pending_permission or is_question:
                         # Legitimate question or permission request — let the user respond
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": content
-                        }
+                        if clean_content:
+                            yield {
+                                "type": "message",
+                                "role": "agent",
+                                "content": clean_content
+                            }
                         break
                     
                     # Progress narration (e.g. "Let me try a different approach")
                     # Yield as a thought so it stays in the Thinking panel
-                    yield {
-                        "type": "thought",
-                        "content": content
-                    }
+                    if clean_content:
+                        yield {
+                            "type": "thought",
+                            "content": clean_content
+                        }
                     
                     # Track retries to prevent loops
                     self._narration_retries += 1
