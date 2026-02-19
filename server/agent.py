@@ -35,9 +35,12 @@ class GokuAgent:
             "6. NO SPOON-FEEDING: Minimize the work the user has to do. If they give you a goal, take full "
             "ownership of the research and execution. Chain multiple tool calls as needed.\n"
             "7. INTEGRATIONS: You are connected to Telegram via a local bot. You can receive and reply to messages there.\n"
-            "8. SEARCH PRIORITY: When the user asks you to search or look something up, ALWAYS use your "
             "built-in search tools (prefixed with 'mcp_search__') FIRST. These are your configured search providers "
-            "(DuckDuckGo, Brave, Google). Only fall back to bash with curl if the search tools fail or are unavailable."
+            "(DuckDuckGo, Brave, Google). Only fall back to bash with curl if the search tools fail or are unavailable.\n"
+            "9. THOUGHT PROCESS: You MUST think step-by-step before answering or taking action. "
+            "Enclose your internal reasoning in <thought>...</thought> tags. "
+            "The user will see these thoughts in real-time to understand your process. "
+            "Keep thoughts concise and focused on the immediate next step."
         )
         self.history: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, str]] = [] # [{"desc": "...", "status": "todo|in_progress|done"}]
@@ -78,7 +81,7 @@ class GokuAgent:
             logger.error(f"Security state error: {e}")
 
         # 1. Retrieval
-        yield {"type": "thought", "content": "Searching vector memory for relevant context..."}
+        # yield {"type": "thought", "content": "Searching vector memory for relevant context..."}
         context = await memory.search_memory(user_text)
         
         # Update system prompt with latest context
@@ -95,10 +98,10 @@ class GokuAgent:
         self.history.append({"role": "user", "content": user_text})
         
         # 2. MCP & Model Routing
-        yield {"type": "thought", "content": "Checking available MCP tools (Git, Search, Shell)..."}
+        # yield {"type": "thought", "content": "Checking available MCP tools (Git, Search, Shell)..."}
         all_tools = await mcp_manager.get_all_tools()
         
-        yield {"type": "thought", "content": "Routing to best model (Hybrid Online/Offline)..."}
+        # yield {"type": "thought", "content": "Routing to best model (Hybrid Online/Offline)..."}
 
         # 3. Execution Loop
         llm_tools = [
@@ -137,24 +140,129 @@ class GokuAgent:
         max_turns = 10 
         for turn in range(max_turns):
             try:
-                response = await router.get_response(
+                response_stream = await router.get_response(
                     model=self.model_override or "default",
                     messages=self.history, 
                     tools=llm_tools if llm_tools else None,
-                    stream=False
+                    stream=True
                 )
             except Exception as e:
                 logger.error(f"Routing Error: {str(e)}")
                 yield {"type": "thought", "content": f"⚠️ System Switch: {str(e)}"}
                 raise e
             
-            msg_response = response.choices[0].message
-            # LiteLLM message response conversion
+            # Streaming Loop
+            full_content = ""
+            tool_calls_accumulator = {} # index -> tool_call object
+            
+            # State tracking for thought parsing
+            inside_thought = False
+            thought_buffer = ""
+            
+            async for chunk in response_stream:
+                if not chunk.choices: continue
+                
+                delta = chunk.choices[0].delta
+                
+                # 1. Handle Text Content with <thought> parsing
+                if delta.content:
+                    text_chunk = delta.content
+                    full_content += text_chunk
+                    
+                    # Robust State Machine for Tags
+                    # Handle split tags like "<tho" + "ught>" by checking buffer end
+                    
+                    combined = thought_buffer + text_chunk if inside_thought else text_chunk
+                    
+                    # Check for opening tag
+                    if not inside_thought and "<thought>" in text_chunk:
+                        inside_thought = True
+                        pre, post = text_chunk.split("<thought>", 1)
+                        # pre is message content, post is thought start
+                        if pre:
+                             # We could yield message here if we supported it
+                             pass
+                        thought_buffer = post
+                        text_chunk = "" # Consumed
+                        
+                    # Check for closing tag
+                    if inside_thought and "</thought>" in combined:
+                        inside_thought = False
+                        # If the tag was split across chunks, we need to be careful
+                        # Simplest approach: find tag in combined buffer
+                        pre, post = combined.split("</thought>", 1)
+                        
+                        # Yield the final thought content
+                        if pre:
+                            yield {"type": "thought", "content": pre}
+                        
+                        thought_buffer = ""
+                        # post is message content
+                        text_chunk = post
+                        # combined is consumed
+                    
+                    if inside_thought:
+                        # Append new chunk to buffer and yield
+                        # Note: if we just entered thought, text_chunk was cleared or set to post
+                        if text_chunk:
+                            thought_buffer += text_chunk
+                            yield {"type": "thought", "content": thought_buffer}
+                    else:
+                        # Outside thought = final message content
+                        # If the model is NOT using thoughts (e.g. didn't follow prompt), 
+                        # we currently don't show anything in "Thinking".
+                        # To fix "Not a thought, it was a respond" complaints, we should detect if
+                        # NO thoughts have occurred after X tokens and maybe yield generic "Thinking..."
+                        # OR just accept that if no thoughts, no thinking card updates.
+                        pass
+                
+                # 2. Handle Tool Calls (Accumulate parts)
+                if delta.tool_calls:
+                    for tc_chunk in delta.tool_calls:
+                        idx = tc_chunk.index
+                        if idx not in tool_calls_accumulator:
+                            tool_calls_accumulator[idx] = {
+                                "id": tc_chunk.id,
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            }
+                        
+                        # Append pieces
+                        if tc_chunk.id: 
+                            tool_calls_accumulator[idx]["id"] = tc_chunk.id
+                        if tc_chunk.function.name:
+                            tool_calls_accumulator[idx]["function"]["name"] += tc_chunk.function.name
+                        if tc_chunk.function.arguments:
+                            tool_calls_accumulator[idx]["function"]["arguments"] += tc_chunk.function.arguments
+
+            # Clean content for history: Remove <thought> tags?
+            # Ideally we keep them for context, or remove them to save tokens/clean history.
+            # Let's keep them so the model has context of its own reasoning.
+            
+            # Reconstruct full response object for history
+            final_tool_calls = []
+            if tool_calls_accumulator:
+                # Sort by index to maintain order
+                sorted_indices = sorted(tool_calls_accumulator.keys())
+                for idx in sorted_indices:
+                    tc = tool_calls_accumulator[idx]
+                    # Create object resembling litellm tool call
+                    tool_obj = type('tool_call', (), {
+                        'id': tc['id'],
+                        'type': 'function',
+                        'function': type('func', (), {
+                            'name': tc['function']['name'],
+                            'arguments': tc['function']['arguments']
+                        })()
+                    })()
+                    final_tool_calls.append(tool_obj)
+
+            # Create message dict for history
             msg_dict = {
                 "role": "assistant",
-                "content": getattr(msg_response, "content", None),
+                "content": full_content,
             }
-            if msg_response.tool_calls:
+            if final_tool_calls:
                 msg_dict["tool_calls"] = [
                     {
                         "id": tc.id,
@@ -163,13 +271,21 @@ class GokuAgent:
                             "name": tc.function.name,
                             "arguments": tc.function.arguments
                         }
-                    } for tc in msg_response.tool_calls
+                    } for tc in final_tool_calls
                 ]
             
             self.history.append(msg_dict)
-
-            content = getattr(msg_response, "content", None)
+            content = full_content
             
+            # Map final_tool_calls back to what the loop expects
+            # Create a mock msg_response object to minimize refactoring downstream logic
+            class MockMessage:
+                 def __init__(self, content, tool_calls):
+                      self.content = content
+                      self.tool_calls = tool_calls
+            
+            msg_response = MockMessage(content, final_tool_calls)
+
             if not msg_response.tool_calls:
                 # No tool calls — is this a final answer or mid-execution narration?
                 if turn == 0 or not content:

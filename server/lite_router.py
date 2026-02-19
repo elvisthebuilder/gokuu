@@ -332,6 +332,98 @@ class LiteRouter:
         
         return OllamaResponse(content, tool_calls_raw, model_name)
 
+    async def _ollama_chat_stream(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
+        """Streaming version of Ollama chat."""
+        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        # Strip /v1 suffix if present
+        base = base.rstrip("/")
+        if base.lower().endswith("/v1"):
+            base = base[:-3]
+        
+        chat_url = f"{base}/api/chat"
+        model_name = model.replace("ollama/", "", 1)
+        
+        # Build Ollama native request body
+        import copy
+        ollama_messages = copy.deepcopy(messages)
+        for msg in ollama_messages:
+            if "tool_calls" in msg:
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            # Ollama expects dict arguments, not JSON string
+                            func["arguments"] = json.loads(args)
+                        except:
+                            pass
+
+        body = {
+            "model": model_name,
+            "messages": ollama_messages,
+            "stream": True,
+            "options": {"num_ctx": 65536}
+        }
+        if tools:
+            body["tools"] = tools
+        
+        logger.info(f"Ollama streaming call: {chat_url} model={model_name}")
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", chat_url, json=body) as resp:
+                if resp.status_code != 200:
+                    error_text = await resp.read()
+                    raise Exception(f"Ollama API error {resp.status_code}: {error_text.decode()}")
+                
+                async for line in resp.aiter_lines():
+                    if not line: continue
+                    try:
+                        chunk = json.loads(line)
+                    except:
+                        continue
+                        
+                    content = chunk.get("message", {}).get("content", "")
+                    tool_calls_raw = chunk.get("message", {}).get("tool_calls", [])
+                    done = chunk.get("done", False)
+                    
+                    # Convert to litellm-style delta object
+                    class Delta:
+                        def __init__(self, content, tool_calls, role):
+                            self.content = content
+                            self.tool_calls = tool_calls
+                            self.role = role
+
+                    class Choice:
+                        def __init__(self, delta, finish_reason):
+                            self.delta = delta
+                            self.finish_reason = finish_reason
+
+                    class Chunk:
+                        def __init__(self, choice):
+                            self.choices = [choice]
+
+                    # Convert tool calls to litellm delta format if any
+                    converted_tools = []
+                    if tool_calls_raw:
+                        for i, tc in enumerate(tool_calls_raw):
+                            func = tc.get("function", {})
+                            tool_obj = type('tool_call_chunk', (), {
+                                'index': i,
+                                'id': f"ollama_call_{id(tc)}",
+                                'type': 'function',
+                                'function': type('func', (), {
+                                    'name': func.get('name'),
+                                    'arguments': json.dumps(func.get('arguments', {}))
+                                })()
+                            })()
+                            converted_tools.append(tool_obj)
+                    
+                    finish_reason = "stop" if done else None
+                    if converted_tools:
+                         finish_reason = "tool_calls" if done else None
+
+                    yield Chunk(Choice(Delta(content, converted_tools or None, "assistant"), finish_reason))
+
     async def get_response(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, stream: bool = True) -> Any:
         try:
             # Use detected default if no specific model requested
@@ -342,7 +434,10 @@ class LiteRouter:
             
             # Direct Ollama call — bypass litellm entirely (OpenClaw pattern)
             if model.startswith("ollama/"):
-                return await self._ollama_chat(model, messages, tools)
+                if stream:
+                    return self._ollama_chat_stream(model, messages, tools)
+                else:
+                    return await self._ollama_chat(model, messages, tools)
             
             # Detect currently available providers
             available = self.available_providers
@@ -397,6 +492,8 @@ class LiteRouter:
             # If cloud auth fails and Ollama is available, fall back to it
             if os.getenv("OLLAMA_BASE_URL"):
                 try:
+                    if stream:
+                         return self._ollama_chat_stream(fallback_local, messages, tools)
                     return await self._ollama_chat(fallback_local, messages, tools)
                 except Exception as local_err:
                     logger.error(f"Critical: Local fallback also failed: {str(local_err)}")
@@ -422,6 +519,8 @@ class LiteRouter:
                     print(f"⚠️  Auth failed: {model}. Falling back to {fallback_local}...")
                 
                 try:
+                    if stream:
+                         return self._ollama_chat_stream(fallback_local, messages, tools)
                     return await self._ollama_chat(fallback_local, messages, tools)
                 except Exception as local_err:
                     logger.error(f"Critical: Local fallback also failed: {str(local_err)}")
