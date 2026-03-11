@@ -1,0 +1,17 @@
+{
+  "site_package_search_strategy": "pep561",
+  "search_path": [
+    {
+      "site-package": "venv/lib/python3.13/site-packages"
+    },
+    {
+      "site-package": "/home/afrifa-gilbert/Documents/Dev/goku/gokuu"
+    }
+  ],
+  "source_directories": [
+    "."
+  ],
+  "exclude": [
+    "venv/.*"
+  ]
+}

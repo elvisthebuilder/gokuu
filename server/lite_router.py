@@ -1,12 +1,17 @@
 import os
 import logging
 import json
+import asyncio
+import copy
 import httpx
 import litellm
 from litellm import acompletion
 from typing import List, Dict, Any, Generator, Optional
 
 logger = logging.getLogger(__name__)
+
+# Retryable HTTP status codes
+_RETRYABLE_STATUS_CODES = {500, 502, 503, 429}
 
 class LiteRouter:
     def __init__(self):
@@ -106,13 +111,17 @@ class LiteRouter:
         return providers
 
 
-    def discover_ollama_models(self) -> List[str]:
-        """Query Ollama /api/tags to discover available models (OpenClaw pattern)."""
+    def _get_ollama_base(self) -> str:
+        """Get the clean Ollama base URL."""
         base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
         if base.lower().endswith("/v1"):
             base = base[:-3]
+        return base
+
+    def discover_ollama_models(self) -> List[str]:
+        """Query Ollama /api/tags to discover available models (OpenClaw pattern)."""
+        base = self._get_ollama_base()
         try:
-            import httpx
             with httpx.Client(timeout=5.0) as client:
                 resp = client.get(f"{base}/api/tags")
                 if resp.status_code == 200:
@@ -122,6 +131,56 @@ class LiteRouter:
         except Exception as e:
             logger.warning(f"Failed to discover Ollama models: {e}")
         return []
+
+    async def check_ollama_health(self) -> bool:
+        """Fast health check — verify Ollama is reachable."""
+        base = self._get_ollama_base()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{base}/api/tags")
+                return resp.status_code == 200
+        except Exception:
+            return False
+
+    def _prepare_ollama_messages(self, messages: List[Dict[str, str]]) -> list:
+        """Deep copy and convert tool arguments and multimodal content for Ollama."""
+        ollama_messages = copy.deepcopy(messages)
+        for msg in ollama_messages:
+            # 1. Handle tool parsing
+            if "tool_calls" in msg:
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            func["arguments"] = json.loads(args)
+                        except Exception:
+                            pass
+                            
+            # 2. Handle Multimodal Vision format (OpenAI -> Ollama translation)
+            content = msg.get("content")
+            if isinstance(content, list):
+                text_parts = []
+                images = []
+                for chunk in content:
+                    if chunk.get("type") == "text":
+                        text_parts.append(chunk.get("text", ""))
+                    elif chunk.get("type") == "image_url":
+                        url = chunk.get("image_url", {}).get("url", "")
+                        if url.startswith("data:image/"):
+                            # Extract raw base64 data after the comma
+                            try:
+                                b64_data = url.split(",", 1)[1]
+                                images.append(b64_data)
+                            except IndexError:
+                                pass
+                
+                # Replace content array with Ollama format
+                msg["content"] = "\n".join(text_parts)
+                if images:
+                    msg["images"] = images
+                    
+        return ollama_messages
 
     def get_default_model(self) -> str:
         """Pick the best available model based on keys or env override."""
@@ -243,59 +302,113 @@ class LiteRouter:
         return results
 
     async def _ollama_chat(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
-        """Direct Ollama /api/chat call — follows OpenClaw's native API pattern."""
-        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        # Strip /v1 suffix if present (OpenClaw pattern: resolveOllamaApiBase)
-        base = base.rstrip("/")
-        if base.lower().endswith("/v1"):
-            base = base[:-3]
-        
+        """Direct Ollama /api/chat call with retry and model fallback."""
+        base = self._get_ollama_base()
         chat_url = f"{base}/api/chat"
         model_name = model.replace("ollama/", "", 1)
-        
-        # Build Ollama native request body
-        # Standardize messages for Ollama (tool arguments as dict, not string)
-        import copy
-        ollama_messages = copy.deepcopy(messages)
-        for msg in ollama_messages:
-            if "tool_calls" in msg:
-                for tc in msg["tool_calls"]:
-                    func = tc.get("function", {})
-                    args = func.get("arguments")
-                    if isinstance(args, str):
-                        try:
-                            # Ollama expects dict arguments, not JSON string
-                            func["arguments"] = json.loads(args)
-                        except:
-                            pass
+        ollama_messages = self._prepare_ollama_messages(messages)
 
         body = {
             "model": model_name,
             "messages": ollama_messages,
             "stream": False,
-            "options": {"num_ctx": 65536}
+            "options": {"num_ctx": 32768}
         }
         if tools:
             body["tools"] = tools
         
-        logger.info(f"Ollama direct call: {chat_url} model={model_name}")
+        # Retry loop with exponential backoff
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            logger.info(f"Ollama direct call: {chat_url} model={model_name} (attempt {attempt + 1}/{max_retries})")
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    resp = await client.post(chat_url, json=body)
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return self._build_ollama_response(data, model_name)
+                    
+                    error_text = resp.text
+                    if resp.status_code == 404 and "not found" in error_text.lower():
+                        raise Exception(f"Local model '{model_name}' not found. Please run: ollama pull {model_name}")
+                    
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
+                        wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                        logger.warning(f"Ollama returned {resp.status_code}, retrying in {wait}s...")
+                        await asyncio.sleep(wait)
+                        last_error = Exception(f"Ollama API error {resp.status_code}: {error_text}")
+                        continue
+                    
+                    last_error = Exception(f"Ollama API error {resp.status_code}: {error_text}")
+            except httpx.ConnectError as e:
+                last_error = Exception(f"Cannot connect to Ollama at {base}. Is it running? Try: ollama serve")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                    continue
+            except httpx.ReadTimeout as e:
+                last_error = Exception(f"Ollama request timed out (model may be loading). Try again in a moment.")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                    continue
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    raise  # Don't retry model-not-found errors
+                last_error = e
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                    continue
         
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(chat_url, json=body)
-            if resp.status_code != 200:
-                error_text = resp.text
-                if resp.status_code == 404 and "not found" in error_text.lower():
-                    raise Exception(f"Local model '{model_name}' not found. Please run: ollama pull {model_name}")
-                raise Exception(f"Ollama API error {resp.status_code}: {error_text}")
+        # All retries exhausted — try alternative model
+        alt_response = await self._try_alternative_ollama_model(model_name, messages, tools, stream=False)
+        if alt_response is not None:
+            return alt_response
+        
+        raise last_error or Exception("Ollama request failed after all retries.")
+
+    async def _try_alternative_ollama_model(self, failed_model: str, messages, tools, stream: bool):
+        """Attempt to use a different Ollama model when the primary one fails."""
+        try:
+            all_models = self.discover_ollama_models()
+            alternatives = [m for m in all_models if m != failed_model]
+            if not alternatives:
+                logger.warning("No alternative Ollama models available for fallback.")
+                return None
             
-            data = resp.json()
-        
-        # Convert Ollama native response to litellm-compatible format
-        # so the rest of agent.py can process it uniformly
+            alt_model = alternatives[0]
+            logger.info(f"Falling back to alternative Ollama model: {alt_model}")
+            
+            if stream:
+                return self._ollama_chat_stream_inner(f"ollama/{alt_model}", messages, tools)
+            else:
+                base = self._get_ollama_base()
+                ollama_messages = self._prepare_ollama_messages(messages)
+                body = {
+                    "model": alt_model,
+                    "messages": ollama_messages,
+                    "stream": False,
+                    "options": {"num_ctx": 32768}
+                }
+                if tools:
+                    body["tools"] = tools
+                
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    resp = await client.post(f"{base}/api/chat", json=body)
+                    if resp.status_code == 200:
+                        return self._build_ollama_response(resp.json(), alt_model)
+                    logger.error(f"Alternative model {alt_model} also failed: {resp.status_code}")
+                    return None
+        except Exception as e:
+            logger.error(f"Alternative model fallback failed: {e}")
+            return None
+
+    @staticmethod
+    def _build_ollama_response(data: dict, model_name: str):
+        """Convert Ollama JSON response to litellm-compatible response object."""
         content = data.get("message", {}).get("content", "")
         tool_calls_raw = data.get("message", {}).get("tool_calls", [])
         
-        # Build a mock litellm-style response object
         class OllamaChoice:
             def __init__(self, content, tool_calls, finish_reason):
                 self.message = type('msg', (), {
@@ -307,7 +420,6 @@ class LiteRouter:
         
         class OllamaResponse:
             def __init__(self, content, tool_calls_raw, model_name):
-                # Convert tool calls to litellm format
                 converted_tools = []
                 for tc in tool_calls_raw:
                     func = tc.get("function", {})
@@ -333,63 +445,91 @@ class LiteRouter:
         return OllamaResponse(content, tool_calls_raw, model_name)
 
     async def _ollama_chat_stream(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
-        """Streaming version of Ollama chat."""
-        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        # Strip /v1 suffix if present
-        base = base.rstrip("/")
-        if base.lower().endswith("/v1"):
-            base = base[:-3]
-        
-        chat_url = f"{base}/api/chat"
+        """Streaming Ollama chat with retry and model fallback."""
+        max_retries = 3
+        last_error = None
         model_name = model.replace("ollama/", "", 1)
         
-        # Build Ollama native request body
-        import copy
-        ollama_messages = copy.deepcopy(messages)
-        for msg in ollama_messages:
-            if "tool_calls" in msg:
-                for tc in msg["tool_calls"]:
-                    func = tc.get("function", {})
-                    args = func.get("arguments")
-                    if isinstance(args, str):
-                        try:
-                            # Ollama expects dict arguments, not JSON string
-                            func["arguments"] = json.loads(args)
-                        except:
-                            pass
+        for attempt in range(max_retries):
+            try:
+                async for chunk in self._ollama_chat_stream_inner(model, messages, tools):
+                    yield chunk
+                return  # Success — exit the retry loop
+            except httpx.ConnectError:
+                last_error = Exception(f"Cannot connect to Ollama. Is it running? Try: ollama serve")
+                if attempt < max_retries - 1:
+                    logger.warning(f"Ollama connection failed, retrying in {2 ** (attempt + 1)}s...")
+                    await asyncio.sleep(2 ** (attempt + 1))
+            except httpx.ReadTimeout:
+                last_error = Exception(f"Ollama request timed out (model may be loading). Try again.")
+                if attempt < max_retries - 1:
+                    logger.warning(f"Ollama timeout, retrying in {2 ** (attempt + 1)}s...")
+                    await asyncio.sleep(2 ** (attempt + 1))
+            except Exception as e:
+                err_str = str(e)
+                if "not found" in err_str.lower():
+                    raise  # Don't retry model-not-found
+                
+                # Check if it's a retryable server error
+                is_retryable = any(f"error {code}" in err_str.lower() or f"{code}" in err_str for code in _RETRYABLE_STATUS_CODES)
+                if is_retryable and attempt < max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"Ollama error: {err_str}. Retrying in {wait}s (attempt {attempt + 1}/{max_retries})...")
+                    await asyncio.sleep(wait)
+                    last_error = e
+                    continue
+                last_error = e
+                break  # Non-retryable error
+        
+        # All retries exhausted — try alternative model
+        try:
+            alt_stream = await self._try_alternative_ollama_model(model_name, messages, tools, stream=True)
+            if alt_stream is not None:
+                async for chunk in alt_stream:
+                    yield chunk
+                return
+        except Exception as alt_e:
+            logger.error(f"Alternative model stream also failed: {alt_e}")
+        
+        raise last_error or Exception("Ollama streaming failed after all retries.")
+
+    async def _ollama_chat_stream_inner(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
+        """Inner streaming implementation (no retry logic)."""
+        base = self._get_ollama_base()
+        chat_url = f"{base}/api/chat"
+        model_name = model.replace("ollama/", "", 1)
+        ollama_messages = self._prepare_ollama_messages(messages)
 
         body = {
             "model": model_name,
             "messages": ollama_messages,
             "stream": True,
-            "options": {"num_ctx": 65536},
-            "think": True # Enable native thinking for supporting models
+            "options": {"num_ctx": 32768}
         }
         if tools:
             body["tools"] = tools
         
         logger.info(f"Ollama streaming call: {chat_url} model={model_name}")
         
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream("POST", chat_url, json=body) as resp:
                 if resp.status_code != 200:
-                    error_text = await resp.read()
+                    error_text = await resp.aread()
                     raise Exception(f"Ollama API error {resp.status_code}: {error_text.decode()}")
                 
                 async for line in resp.aiter_lines():
                     if not line: continue
                     try:
                         chunk = json.loads(line)
-                    except:
+                    except Exception:
                         continue
                         
                     msg = chunk.get("message", {})
                     content = msg.get("content", "")
-                    thinking = msg.get("thinking", "") # Capture native thinking field
+                    thinking = msg.get("thinking", "")
                     tool_calls_raw = msg.get("tool_calls", [])
                     done = chunk.get("done", False)
                     
-                    # Convert to litellm-style delta object
                     class Delta:
                         def __init__(self, content, thinking, tool_calls, role):
                             self.content = content
@@ -406,18 +546,25 @@ class LiteRouter:
                         def __init__(self, choice):
                             self.choices = [choice]
 
-                    # Convert tool calls to litellm delta format if any
                     converted_tools = []
                     if tool_calls_raw:
                         for i, tc in enumerate(tool_calls_raw):
                             func = tc.get("function", {})
+                            args_raw = func.get('arguments', {})
+                            if isinstance(args_raw, dict):
+                                args_str = json.dumps(args_raw)
+                            elif isinstance(args_raw, str):
+                                args_str = args_raw
+                            else:
+                                args_str = ""
+                                
                             tool_obj = type('tool_call_chunk', (), {
                                 'index': i,
                                 'id': f"ollama_call_{id(tc)}",
                                 'type': 'function',
                                 'function': type('func', (), {
                                     'name': func.get('name'),
-                                    'arguments': func.get('arguments') if isinstance(func.get('arguments'), str) else json.dumps(func.get('arguments', {}))
+                                    'arguments': args_str
                                 })()
                             })()
                             converted_tools.append(tool_obj)
@@ -438,6 +585,13 @@ class LiteRouter:
             
             # Direct Ollama call — bypass litellm entirely (OpenClaw pattern)
             if model.startswith("ollama/"):
+                # Quick health check before committing to a long request
+                if not await self.check_ollama_health():
+                    raise Exception(
+                        "Ollama is not reachable. Please ensure it's running:\n"
+                        "  • Start it with: ollama serve\n"
+                        "  • Check status with: ollama list"
+                    )
                 if stream:
                     return self._ollama_chat_stream(model, messages, tools)
                 else:
@@ -493,7 +647,6 @@ class LiteRouter:
             except ImportError:
                 print(f"⚠️  Auth failed: {model}. Falling back to {fallback_local}...")
             
-            # If cloud auth fails and Ollama is available, fall back to it
             if os.getenv("OLLAMA_BASE_URL"):
                 try:
                     if stream:
@@ -509,10 +662,10 @@ class LiteRouter:
             logger.error(f"Error in LiteRouter: {str(e)}")
             err_msg = str(e).lower()
             is_auth_error = any(x in err_msg for x in ["401", "api key", "credentials", "unauthorized", "bad credentials"])
+            is_ollama_error = model.startswith("ollama/") if model else False
             
             # If cloud auth fails and Ollama is available, fall back to it
-            if is_auth_error and not model.startswith("ollama/") and os.getenv("OLLAMA_BASE_URL"):
-                # Discover actual available model (OpenClaw pattern)
+            if is_auth_error and not is_ollama_error and os.getenv("OLLAMA_BASE_URL"):
                 ollama_models = self.discover_ollama_models()
                 fallback_local = f"ollama/{ollama_models[0]}" if ollama_models else "ollama/default"
                 
@@ -533,11 +686,18 @@ class LiteRouter:
             if is_auth_error:
                 raise Exception(f"Authentication Failed for {model}. Please verify your API key.")
             
-            # Special handling for missing Ollama models
-            if "not found" in err_msg and "ollama" in err_msg:
-                model_name = model.replace("ollama/", "")
-                raise Exception(f"Local model '{model_name}' not found. Please run: ollama pull {model_name}")
-                
+            # Actionable error messages for Ollama failures
+            if is_ollama_error:
+                if "connect" in err_msg or "not reachable" in err_msg:
+                    raise Exception("Ollama is offline. Start it with: ollama serve")
+                if "not found" in err_msg:
+                    model_name = model.replace("ollama/", "")
+                    raise Exception(f"Model '{model_name}' not found. Run: ollama pull {model_name}")
+                if "timeout" in err_msg:
+                    raise Exception("Ollama timed out — the model may still be loading. Try again in a moment.")
+                # Generic Ollama server error
+                raise Exception(f"Ollama service error: {str(e)}. Try restarting with: ollama serve")
+            
             raise e
 
 router = LiteRouter()

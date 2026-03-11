@@ -121,7 +121,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     user_text = msg.get("content", "")
                     if not user_text: continue
 
-                    async for event in agent.run_agent(user_text):
+                    async for event in agent.run_agent(user_text, source="web"):
                         await manager.send_personal_message(json.dumps(event), websocket)
                 except Exception as e:
                     logger.error(f"Error processing message: {str(e)}")

@@ -50,24 +50,29 @@ goku_style = Style.from_dict({
     'text': '', # Default terminal color
 })
 
+class ExecutionManager:
+    """Manages state for tool execution confirmation."""
+    def __init__(self):
+        self.cache = set()
+        self.session_allowlist = set()
+        self.live_ctx = None
+
+exec_manager = ExecutionManager()
+
 async def confirm_execution(tool_name: str, args: dict) -> bool:
     """Non-blocking execution confirmation."""
     cmd = args.get("command", str(args))
     
     # Check cache (prevent repetitive prompts)
-    if not hasattr(confirm_execution, "cache"):
-        confirm_execution.cache = set()
-    if cmd in confirm_execution.cache:
+    if cmd in exec_manager.cache:
         return True
         
     # Check Session Trust (allow user to whitelist tool)
-    if not hasattr(confirm_execution, "session_allowlist"):
-        confirm_execution.session_allowlist = set()
-    if tool_name in confirm_execution.session_allowlist:
+    if tool_name in exec_manager.session_allowlist:
         return True
     
     # Handle Live display conflict
-    live = getattr(confirm_execution, "live_ctx", None)
+    live = exec_manager.live_ctx
     if live and live.is_started:
         live.stop()
         
@@ -85,16 +90,19 @@ async def confirm_execution(tool_name: str, args: dict) -> bool:
             default="Yes"
         ).ask_async()
         
-        if answer == "No": return False
+        if not answer or answer == "No": 
+            return False
         
         if "Trust" in answer:
-            confirm_execution.session_allowlist.add(tool_name)
+            exec_manager.session_allowlist.add(tool_name)
             
-        confirm_execution.cache.add(cmd)
+        exec_manager.cache.add(cmd)
         return True
     finally:
         if live and not live.is_started:
             live.start()
+    
+    return True # Explicit fallback
 
 # Register security callback
 # agent.confirmation_callback = confirm_execution
@@ -112,6 +120,13 @@ def get_status_str():
         status.append(f"[bold green]LLM:[/] {', '.join(providers)}")
     else:
         status.append("[bold yellow]LLM:[/] Local (Ollama)")
+
+    # Model
+    try:
+        model_name = router.get_default_model()
+        status.append(f"[bold cyan]MODEL:[/] {model_name}")
+    except Exception:
+        status.append("[bold dim]MODEL:[/] Unknown")
         
     # Memory
     if getattr(memory, "online", False):
@@ -126,11 +141,11 @@ async def run_chat(query: str):
     
     with Live(console=console, refresh_per_second=10) as live:
         # Inject live context into confirmation callback so it can pause updates
-        confirm_execution.live_ctx = live
+        exec_manager.live_ctx = live
         
         last_thought = ""
         try:
-            async for event in agent.run_agent(query):
+            async for event in agent.run_agent(query, source="cli"):
                 if event["type"] == "thought" and event["content"]:
                     if not live.is_started: live.start()
                     last_thought = event['content']
@@ -403,7 +418,7 @@ async def switch_provider_menu():
     elif "xAI" in selection: agent.model_override = "xai/grok-2-latest"
     elif "OpenRouter" in selection: agent.model_override = "openrouter/anthropic/claude-3.5-sonnet"
     elif "Qwen" in selection: agent.model_override = "qwen/qwen-turbo"
-    elif "Z.AI" in selection: agent.model_override = "zai/glm-4"
+    elif "Z.AI" in selection: agent.model_override = "zai/glm-4v"
     elif "Qianfan" in selection: agent.model_override = "qianfan/eb-4"
     elif "Copilot" in selection: agent.model_override = "github/gpt-4o"
     elif "Vercel" in selection: agent.model_override = "ai-gateway/default"
@@ -599,6 +614,25 @@ async def configure_search():
     rprint("[bold green]✅ Search provider updated![/bold green]")
 
 
+async def configure_vision_provider():
+    """Configure dedicated vision model."""
+    rprint(Panel("[bold green]📸 VISION PROVIDER[/bold green]\nConfigure a dedicated model for analyzing images.", border_style="cyan"))
+    
+    current_vision = config_manager.get_key("GOKU_VISION_MODEL", "")
+    vision_model = await questionary.text(
+        "Dedicated Vision model for images (e.g. gpt-4o, zai/glm-4v, ollama/llava) [Leave blank to clear]:",
+        default=current_vision
+    ).ask_async()
+    
+    if vision_model is not None:  # Check for Ctrl+C
+        if vision_model.strip():
+            config_manager.set_key("GOKU_VISION_MODEL", vision_model.strip())
+            rprint(f"[bold green]✅ Vision provider set to {vision_model.strip()}![/bold green]")
+        else:
+            config_manager.delete_key("GOKU_VISION_MODEL")
+            rprint("[bold yellow]🧹 Vision provider cleared. Default model will handle images.[/bold yellow]")
+
+
 async def configure_memory():
     """Configure vector memory (Qdrant)."""
     rprint(Panel("[bold green]💾 MEMORY (Qdrant)[/bold green]\nConfigure vector memory for long-term context.", border_style="cyan"))
@@ -707,6 +741,7 @@ async def goku_config_menu():
                 "🔗 Integrations           — GitHub, Slack, Notion, Spotify & more",
                 "🔧 MCP Servers            — Git, Search, Shell endpoints",
                 "🔍 Search Provider        — Brave / Google / DuckDuckGo",
+                "📸 Vision Provider        — Dedicated model for viewing images",
                 "💾 Memory (Qdrant)        — Vector memory for long-term context",
                 "🎛️  Model Preferences      — Default model, temperature, tokens",
                 "📋 View Current Config",
@@ -726,6 +761,8 @@ async def goku_config_menu():
             await configure_mcp_servers()
         elif "Search Provider" in section:
             await configure_search()
+        elif "Vision Provider" in section:
+            await configure_vision_provider()
         elif "Memory" in section:
             await configure_memory()
         elif "Model Preferences" in section:
@@ -776,10 +813,12 @@ async def interactive_loop():
         try:
             from server.telegram_bot import start_telegram_bot
             # Run in background
-            asyncio.create_task(start_telegram_bot(telegram_token))
-            rprint("[dim]📱 Telegram bot started in background[/dim]")
+            bot_task = asyncio.create_task(start_telegram_bot(telegram_token))
+            rprint("[bold green]📱 Telegram bot initialization started...[/bold green]")
         except Exception as e:
-            rprint(f"[red]Failed to start Telegram Bot: {e}[/red]")
+            rprint(f"[bold red]❌ Failed to start Telegram Bot: {e}[/bold red]")
+    else:
+        rprint("[bold yellow]⚠️  TELEGRAM_BOT_TOKEN not found in .env. Telegram interface disabled.[/bold yellow]")
 
     # Initialize session with history and lexer
     session = PromptSession(
@@ -928,7 +967,7 @@ async def interactive_loop():
             
             if is_api_err:
                 # Don't show a long traceback, run_chat already printed a clean error panel if it wasn't swallowed.
-                if questionary.confirm("Would you like to switch to a different AI brain?").ask():
+                if await questionary.confirm("Would you like to switch to a different AI brain?").ask_async():
                     if switch_provider_menu():
                         rprint("[dim]Provider updated. You can retry your command now.[/dim]")
             else:
