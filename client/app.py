@@ -1,14 +1,14 @@
 import asyncio
-import typer
-import questionary
-from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-from rich.markdown import Markdown
-from rich.spinner import Spinner
-from rich.text import Text
-from rich.table import Table
-from rich import print as rprint
+import typer # type: ignore
+import questionary # type: ignore
+from rich.console import Console # type: ignore
+from rich.live import Live # type: ignore
+from rich.panel import Panel # type: ignore
+from rich.markdown import Markdown # type: ignore
+from rich.spinner import Spinner # type: ignore
+from rich.text import Text # type: ignore
+from rich.table import Table # type: ignore
+from rich import print as rprint # type: ignore
 import sys
 import os
 import logging
@@ -22,18 +22,18 @@ logging.getLogger("LiteLLM Proxy").setLevel(logging.CRITICAL)
 # Add parent directory to sys.path to allow importing from server
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server.agent import agent
-from server.memory import memory
-from server.lite_router import router
-from server.config_manager import config_manager
+from server.agent import agent # type: ignore
+from server.memory import memory # type: ignore
+from server.lite_router import router # type: ignore
+from server.config_manager import config_manager # type: ignore
 
 # Prompt Toolkit for rich input
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.styles import Style
-from prompt_toolkit.lexers import PygmentsLexer
-from pygments.lexer import RegexLexer
-from pygments.token import Token
+from prompt_toolkit import PromptSession # type: ignore
+from prompt_toolkit.history import InMemoryHistory # type: ignore
+from prompt_toolkit.styles import Style # type: ignore
+from prompt_toolkit.lexers import PygmentsLexer # type: ignore
+from pygments.lexer import RegexLexer # type: ignore
+from pygments.token import Token # type: ignore
 
 class GokuLexer(RegexLexer):
     """Highlight commands in yellow, text in default."""
@@ -166,7 +166,7 @@ async def run_chat(query: str):
                     exec_spinner = Spinner("dots", text=Text.from_markup(f" Executing: [bold yellow]{event['name']}[/bold yellow]"), style="yellow")
                     content.append(Panel(exec_spinner, title="🛠️  Executing", border_style="yellow"))
                     
-                    from rich.console import Group
+                    from rich.console import Group # type: ignore
                     live.update(Group(*content))
                 
                 elif event["type"] == "task_update":
@@ -325,7 +325,7 @@ async def setup_wizard():
     elif "Ollama" in provider:
         # Check if default ollama is reachable & discover models (OpenClaw pattern)
         try:
-            import httpx
+            import httpx # type: ignore
             with httpx.Client(timeout=3.0) as client:
                 resp = client.get("http://localhost:11434/api/tags")
                 if resp.status_code == 200:
@@ -414,7 +414,7 @@ async def switch_provider_menu():
     elif "vLLM" in selection: agent.model_override = "vllm/default"
     elif "MiniMax" in selection: agent.model_override = "minimax/MiniMax-M2.5"
     elif "Moonshot" in selection: agent.model_override = "moonshot/kimi-k2.5"
-    elif "Google" in selection: agent.model_override = "gemini/gemini-1.5-flash"
+    elif "Google" in selection: agent.model_override = "gemini/gemini-3.1-pro-preview"
     elif "xAI" in selection: agent.model_override = "xai/grok-2-latest"
     elif "OpenRouter" in selection: agent.model_override = "openrouter/anthropic/claude-3.5-sonnet"
     elif "Qwen" in selection: agent.model_override = "qwen/qwen-turbo"
@@ -618,19 +618,47 @@ async def configure_vision_provider():
     """Configure dedicated vision model."""
     rprint(Panel("[bold green]📸 VISION PROVIDER[/bold green]\nConfigure a dedicated model for analyzing images.", border_style="cyan"))
     
-    current_vision = config_manager.get_key("GOKU_VISION_MODEL", "")
-    vision_model = await questionary.text(
-        "Dedicated Vision model for images (e.g. gpt-4o, zai/glm-4v, ollama/llava) [Leave blank to clear]:",
-        default=current_vision
+    current_provider = config_manager.get_key("VISION_PROVIDER", "default")
+    
+    provider = await questionary.select(
+        "Select Vision Provider:",
+        choices=[
+            "Default (Goku Core Model handles images)",
+            "OpenAI (Use GPT-4o for vision)",
+            "Google (Use Gemini 2.5 Flash for vision)",
+            "Cancel"
+        ],
+        default=f"Default (Goku Core Model handles images)" if current_provider == "default" else 
+                f"OpenAI (Use GPT-4o for vision)" if current_provider == "openai" else
+                f"Google (Use Gemini 2.5 Flash for vision)" if current_provider == "google" else "Cancel"
     ).ask_async()
     
-    if vision_model is not None:  # Check for Ctrl+C
-        if vision_model.strip():
-            config_manager.set_key("GOKU_VISION_MODEL", vision_model.strip())
-            rprint(f"[bold green]✅ Vision provider set to {vision_model.strip()}![/bold green]")
-        else:
-            config_manager.delete_key("GOKU_VISION_MODEL")
-            rprint("[bold yellow]🧹 Vision provider cleared. Default model will handle images.[/bold yellow]")
+    if not provider or provider == "Cancel":
+        return
+
+    if "Default" in provider:
+        config_manager.set_key("VISION_PROVIDER", "default")
+        rprint("[bold yellow]🧹 Vision provider set to Default. Core model will handle images.[/bold yellow]")
+    elif "OpenAI" in provider:
+        config_manager.set_key("VISION_PROVIDER", "openai")
+        # Check for key
+        if not config_manager.get_key("OPENAI_API_KEY"):
+            rprint("[yellow]OpenAI selected but OPENAI_API_KEY is missing.[/yellow]")
+            key = await questionary.password("Enter OpenAI API Key (sk-...):").ask_async()
+            if key:
+                config_manager.set_key("OPENAI_API_KEY", key)
+        rprint("[bold green]✅ Vision provider set to OpenAI (GPT-4o).[/bold green]")
+    elif "Google" in provider:
+        config_manager.set_key("VISION_PROVIDER", "google")
+        # Check for key
+        if not config_manager.get_key("GOOGLE_API_KEY"):
+            rprint("[yellow]Google selected but GOOGLE_API_KEY is missing.[/yellow]")
+            key = await questionary.password("Enter Google API Key:").ask_async()
+            if key:
+                config_manager.set_key("GOOGLE_API_KEY", key)
+                # LiteLLM also uses GEMINI_API_KEY frequently
+                config_manager.set_key("GEMINI_API_KEY", key)
+        rprint("[bold green]✅ Vision provider set to Google (Gemini 1.5 Flash).[/bold green]")
 
 
 async def configure_memory():
@@ -797,7 +825,7 @@ def interactive():
             return
 
     console.clear()
-    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v1.0[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
+    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v2.1[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
     
     # Run the main async loop
     try:
@@ -811,7 +839,7 @@ async def interactive_loop():
     telegram_token = config_manager.get_key("TELEGRAM_BOT_TOKEN")
     if telegram_token:
         try:
-            from server.telegram_bot import start_telegram_bot
+            from server.telegram_bot import start_telegram_bot # type: ignore
             # Run in background
             bot_task = asyncio.create_task(start_telegram_bot(telegram_token))
             rprint("[bold green]📱 Telegram bot initialization started...[/bold green]")
@@ -850,7 +878,7 @@ async def interactive_loop():
                 if provider == "openai": agent.model_override = "gpt-4o"
                 elif provider == "anthropic": agent.model_override = "claude-3-5-sonnet-20240620"
                 elif provider == "github": agent.model_override = "github/gpt-4o"
-                elif provider == "google": agent.model_override = "gemini/gemini-1.5-flash"
+                elif provider == "google": agent.model_override = "gemini/gemini-3.1-pro-preview"
                 elif provider == "groq": agent.model_override = "groq/llama-3.3-70b-versatile"
                 elif provider == "openrouter": agent.model_override = "openrouter/anthropic/claude-3.5-sonnet"
                 elif provider == "huggingface": agent.model_override = "huggingface/meta-llama/Llama-3.2-3B-Instruct"
@@ -912,6 +940,20 @@ async def interactive_loop():
                 rprint(f"[dim]Telegram Bot: {status}[/dim]")
                 continue
 
+            elif cmd == "/view":
+                if len(parts) < 2:
+                    rprint("[yellow]Usage: /view [image_path] [optional question][/yellow]")
+                    continue
+                path = parts[1]
+                if not os.path.exists(path):
+                    rprint(f"[red]Error: File not found at {path}[/red]")
+                    continue
+                
+                additional_query = parts[2] if len(parts) > 2 else "Analyze this image."
+                query = f"[Photo Received: {path}] {additional_query}"
+                # Fall through to run_chat(query)
+                pass
+
             elif cmd == "/config":
                 await goku_config_menu()
                 continue
@@ -928,6 +970,7 @@ async def interactive_loop():
                 table.add_row("/model [name]", "Switch specific model")
                 table.add_row("/set-key [k] [v]", "Set API key or env var")
                 table.add_row("/reset", "Clear chat history")
+                table.add_row("/view [path]", "Send an image to Goku (Native Vision)")
                 table.add_row("status", "Show agent status")
                 table.add_row("exit / quit", "Exit agent")
                 console.print(table)

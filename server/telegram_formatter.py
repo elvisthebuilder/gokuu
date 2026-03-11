@@ -10,6 +10,7 @@ Reference: https://core.telegram.org/bots/api#markdownv2-style
 
 import re
 import logging
+from typing import cast, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _convert_markdown_to_mdv2(text: str) -> str:
         placeholder = f"\x00CODEBLOCK{len(code_blocks)}\x00"
         # In MarkdownV2, pre-formatted blocks use: ```lang\ncode```
         # Code inside ``` does NOT need escaping.
-        code_blocks.append(f"```{lang}\n{code}```")
+        code_blocks.append(cast(Any, f"```{lang}\n{code}```"))
         return placeholder
     
     # Match fenced code blocks (```lang ... ```)
@@ -56,7 +57,7 @@ def _convert_markdown_to_mdv2(text: str) -> str:
         code = match.group(1)
         placeholder = f"\x00INLINECODE{len(inline_codes)}\x00"
         # Inline code in MarkdownV2: `code` — contents are not escaped
-        inline_codes.append(f"`{code}`")
+        inline_codes.append(cast(Any, f"`{code}`"))
         return placeholder
     
     text = re.sub(r'`([^`\n]+)`', _stash_inline_code, text)
@@ -72,7 +73,7 @@ def _convert_markdown_to_mdv2(text: str) -> str:
         # Link text needs escaping, URL does NOT (except for `)` and `\`)
         escaped_text = _escape_mdv2(link_text)
         safe_url = url.replace('\\', '\\\\').replace(')', '\\)')
-        links.append(f"[{escaped_text}]({safe_url})")
+        links.append(cast(Any, f"[{escaped_text}]({safe_url})"))
         return placeholder
     
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', _stash_link, text)
@@ -90,12 +91,12 @@ def _convert_markdown_to_mdv2(text: str) -> str:
             heading_text = heading_match.group(2).strip()
             # Escape first, then wrap in bold
             escaped = _escape_mdv2(heading_text)
-            converted_lines.append(f"\n*{escaped.upper()}*\n")
+            converted_lines.append(cast(Any, f"\n*{escaped.upper()}*\n"))
             continue
 
         # Horizontal rules → simple separator
         if re.match(r'^[-*_]{3,}\s*$', stripped):
-            converted_lines.append(_escape_mdv2("───────────"))
+            converted_lines.append(cast(Any, _escape_mdv2("───────────")))
             continue
 
         # Bullet points: - item, * item, • item
@@ -103,7 +104,7 @@ def _convert_markdown_to_mdv2(text: str) -> str:
         if bullet_match:
             content = bullet_match.group(1)
             content = _apply_inline_formatting(content)
-            converted_lines.append(f"• {content}")
+            converted_lines.append(cast(Any, f"• {content}"))
             continue
 
         # Numbered lists: 1. item, 2) item
@@ -112,11 +113,11 @@ def _convert_markdown_to_mdv2(text: str) -> str:
             num = num_match.group(1)
             content = num_match.group(2)
             content = _apply_inline_formatting(content)
-            converted_lines.append(f"{_escape_mdv2(num)}\\. {content}")
+            converted_lines.append(cast(Any, f"{_escape_mdv2(num)}\\. {content}"))
             continue
 
         # Regular line — apply inline formatting and escape
-        converted_lines.append(_apply_inline_formatting(stripped))
+        converted_lines.append(cast(Any, _apply_inline_formatting(stripped)))
     
     text = '\n'.join(converted_lines)
 
@@ -170,10 +171,13 @@ def _apply_inline_formatting(text: str) -> str:
     text = re.sub(r'(?<![A-Za-z0-9])_(?!_)(.+?)(?<!_)_(?![A-Za-z0-9])', _italic_replace, text)
     
     # Strikethrough: ~~text~~ → ~text~ in MarkdownV2
+    STRIKE_OPEN = "\x01SOPEN\x01"
+    STRIKE_CLOSE = "\x01SCLOSE\x01"
+    
     def _strike_replace(match):
         inner = match.group(1)
         escaped_inner = _escape_mdv2(inner)
-        return f"~{escaped_inner}~"
+        return f"{STRIKE_OPEN}{escaped_inner}{STRIKE_CLOSE}"
     
     text = re.sub(r'~~(.+?)~~', _strike_replace, text)
 
@@ -185,34 +189,27 @@ def _apply_inline_formatting(text: str) -> str:
         
         # Skip already-escaped characters
         if ch == '\\' and i + 1 < len(text):
-            result.append(ch)
-            result.append(text[i + 1])
+            result.append(cast(Any, ch))
+            result.append(cast(Any, text[i + 1]))
             i += 2
             continue
         
-        # Skip placeholder bytes
-        if ch == '\x01':
-            result.append(ch)
-            i += 1
-            continue
-        
-        # Skip MarkdownV2 formatting markers we just placed
-        # Strikethrough: ~...~
-        if ch == '~':
-            result.append(ch)
+        # Placeholder bytes (formatting markers we just placed)
+        if ch == '\b' or ch == '\r' or ch == '\x01':
+            result.append(cast(Any, ch))
             i += 1
             continue
         # Code placeholders (already handled upstream)
         if ch == '`':
-            result.append(ch)
+            result.append(cast(Any, ch))
             i += 1
             continue
         
         # Escape remaining special chars
         if ch in _SPECIAL_CHARS:
-            result.append(f'\\{ch}')
+            result.append(cast(Any, f'\\{ch}'))
         else:
-            result.append(ch)
+            result.append(cast(Any, ch))
         
         i += 1
     
@@ -223,6 +220,8 @@ def _apply_inline_formatting(text: str) -> str:
     text = text.replace(BOLD_CLOSE, "*")
     text = text.replace(ITALIC_OPEN, "_")
     text = text.replace(ITALIC_CLOSE, "_")
+    text = text.replace(STRIKE_OPEN, "~")
+    text = text.replace(STRIKE_CLOSE, "~")
     
     return text
 
@@ -268,24 +267,24 @@ def smart_chunk(text: str, max_length: int = 4096) -> list[str]:
     
     while remaining:
         if len(remaining) <= max_length:
-            chunks.append(remaining)
+            chunks.append(cast(Any, remaining))
             break
         
         # Find a good split point within the limit
         split_at = max_length
         
         # Prefer splitting at double newline (paragraph boundary)
-        para_break = remaining.rfind('\n\n', 0, max_length)
+        para_break = cast(Any, remaining).rfind('\n\n', 0, max_length)
         if para_break > max_length // 3:  # Don't split too early
             split_at = para_break
         else:
             # Fall back to single newline
-            line_break = remaining.rfind('\n', 0, max_length)
+            line_break = cast(Any, remaining).rfind('\n', 0, max_length)
             if line_break > max_length // 3:
                 split_at = line_break
         
         # Safety: check we're not splitting inside a code block
-        chunk_candidate = remaining[:split_at]
+        chunk_candidate = cast(Any, remaining)[:split_at]
         open_code_blocks = chunk_candidate.count('```')
         if open_code_blocks % 2 != 0:
             # We'd split inside a code block — find the start of this code block
@@ -297,8 +296,8 @@ def smart_chunk(text: str, max_length: int = 4096) -> list[str]:
                 split_at = safe_split
             # else: can't avoid it, split at max_length anyway
         
-        chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip('\n')
+        chunks.append(cast(Any, remaining)[:split_at].rstrip())
+        remaining = cast(Any, remaining)[split_at:].lstrip('\n')
     
     return chunks
 

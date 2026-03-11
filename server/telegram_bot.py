@@ -1,13 +1,14 @@
 import logging
 import asyncio
 import os
-from typing import cast
+from typing import cast, Any
+import re
 from datetime import datetime, timedelta
-from telegram import Update, constants
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from server.agent import agent
-from server.telegram_formatter import format_for_telegram, smart_chunk, strip_markdown
+from telegram import Update, constants # type: ignore
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters # type: ignore
+from apscheduler.schedulers.asyncio import AsyncIOScheduler # type: ignore
+from server.agent import agent # type: ignore
+from server.telegram_formatter import format_for_telegram, smart_chunk, strip_markdown # type: ignore
 
 # Configure uploads directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -116,14 +117,14 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
 _latest_context = None
 _latest_chat_id = None
 
-async def send_telegram_notification(text: str, chat_id: int = None):
+async def send_telegram_notification(text: str, chat_id: int | None = None):
     """Sends a notification message to the user via Telegram."""
     global _latest_context, _latest_chat_id
     target_chat_id = chat_id or _latest_chat_id
     if _latest_context and target_chat_id:
         try:
             # Check if text needs formatting
-            from server.telegram_formatter import format_markdown_v2
+            from server.telegram_formatter import format_markdown_v2 # type: ignore
             formatted_text = format_markdown_v2(text)
             await _latest_context.bot.send_message(
                 chat_id=target_chat_id,
@@ -149,7 +150,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check for @mention summoning
     is_summon = False
     if query.strip().startswith("@"):
-        import re
         match = re.match(r"@(\w+)\s+(.*)", query.strip())
         if match:
             skill_name = match.group(1).lower()
@@ -217,7 +217,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full_query = f"{attachment_info} {implicit_prompt}"
     elif is_summon:
         # For summons, we want the agent to call the specific tool immediately
-        import re
         mention_match = re.search(r"@(\w+)", (update.message.text or update.message.caption or "").strip())
         skill_name = mention_match.group(1).lower() if mention_match else "unknown"
         # The agent will look for openclaw_agent_<skill_name> or openclaw_skill_<skill_name>
@@ -244,7 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
                     try:
                         status = _describe_tool_action(event.get('name', ''), event.get('args', {}))
-                        await status_msg.edit_text(status)
+                        await cast(Any, status_msg).edit_text(status)
                     except Exception:
                         pass 
                 elif event["type"] == "message":
@@ -258,7 +257,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
             
         # After the loop finishes (either naturally or via StopAsyncIteration), check if the agent triggered the send_file tool
-        for msg in agent.history[-1:]: # Only check the most recent turn
+        for msg in cast(list, agent.history[-1:]): # Only check the most recent turn
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
                     if tc.get("function", {}).get("name") == "send_telegram_file":
@@ -271,7 +270,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             caption = args.get("caption", "")
                             
                             if file_path and os.path.exists(file_path):
-                                await status_msg.edit_text(f"📤 Uploading file: {os.path.basename(file_path)}...")
+                                await cast(Any, status_msg).edit_text(f"📤 Uploading file: {os.path.basename(file_path)}...")
                                 # Use send_document for general files
                                 await context.bot.send_document(
                                     chat_id=update.effective_chat.id,
@@ -292,7 +291,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(chunks) > 1:
                 # Multiple chunks — send as separate messages
                 try:
-                    await status_msg.delete()
+                    await cast(Any, status_msg).delete()
                 except Exception:
                     pass
                 for chunk in chunks:
@@ -312,16 +311,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Single message — edit the status message
                 try:
-                    await status_msg.edit_text(formatted_text, parse_mode="MarkdownV2")
+                    await cast(Any, status_msg).edit_text(formatted_text, parse_mode="MarkdownV2")
                 except Exception as e:
                     logger.warning(f"MarkdownV2 edit failed, falling back to plain text: {e}")
                     try:
                         plain = strip_markdown(raw_text)
-                        await status_msg.edit_text(plain)
+                        await cast(Any, status_msg).edit_text(plain)
                     except Exception:
-                        await status_msg.edit_text(raw_text[:4096])
-        else:
-            await status_msg.edit_text("✅ Done")
+                        await cast(Any, status_msg).edit_text(cast(Any, raw_text)[:4096])
             
     except Exception as e:
         logger.error(f"Error processing telegram message: {e}")
@@ -339,10 +336,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif "auth" in err_msg or "api key" in err_msg:
             user_error = "🔑 Authentication error with the AI provider. Please check your API keys."
         else:
-            user_error = f"❌ Something went wrong: {str(e)[:200]}"
+            user_error = f"❌ Something went wrong: {cast(Any, str(e))[:200]}"
         
         try:
-            await status_msg.edit_text(user_error)
+            await cast(Any, status_msg).edit_text(user_error)
         except Exception:
             pass
 

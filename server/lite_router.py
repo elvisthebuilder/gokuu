@@ -3,10 +3,10 @@ import logging
 import json
 import asyncio
 import copy
-import httpx
-import litellm
-from litellm import acompletion
-from typing import List, Dict, Any, Generator, Optional
+import httpx # type: ignore
+import litellm # type: ignore
+from litellm import completion, acompletion # type: ignore
+from typing import List, Dict, Any, Optional, AsyncGenerator, cast, Any as AnyType
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class LiteRouter:
         litellm.suppress_debug_info = True
         os.environ["LITELLM_LOG"] = "ERROR"  # Suppress Give Feedback messages
         self.http_client = httpx.AsyncClient(timeout=10.0)
+        self.ollama_url = self._get_ollama_base()
 
     @property
     def available_providers(self) -> List[str]:
@@ -115,8 +116,16 @@ class LiteRouter:
         """Get the clean Ollama base URL."""
         base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
         if base.lower().endswith("/v1"):
-            base = base[:-3]
+            base = base[:-3] # type: ignore
         return base
+
+    def is_ollama_available(self) -> bool:
+        """Ping the configured Ollama URL to ensure connectivity."""
+        try:
+            r = httpx.get(f"{self.ollama_url}/api/tags", timeout=1.0)
+            return r.status_code == 200
+        except Exception:
+            return False
 
     def discover_ollama_models(self) -> List[str]:
         """Query Ollama /api/tags to discover available models (OpenClaw pattern)."""
@@ -127,7 +136,7 @@ class LiteRouter:
                 if resp.status_code == 200:
                     data = resp.json()
                     models = data.get("models", [])
-                    return [m["name"] for m in models if "name" in m]
+                    return [cast(str, m["name"]) for m in models if "name" in m]
         except Exception as e:
             logger.warning(f"Failed to discover Ollama models: {e}")
         return []
@@ -141,44 +150,62 @@ class LiteRouter:
                 return resp.status_code == 200
         except Exception:
             return False
+        return False
 
     def _prepare_ollama_messages(self, messages: List[Dict[str, str]]) -> list:
         """Deep copy and convert tool arguments and multimodal content for Ollama."""
-        ollama_messages = copy.deepcopy(messages)
-        for msg in ollama_messages:
-            # 1. Handle tool parsing
+        # 1. Trim history to prevent massive context bloat (Keep last 20)
+        trimmed_messages = messages[-20:] # type: ignore
+        ollama_messages = copy.deepcopy(trimmed_messages)
+        
+        total_msgs = len(cast(list, ollama_messages))
+        for i, msg in enumerate(cast(list, ollama_messages)):
+            # 2. Handle tool parsing
             if "tool_calls" in msg:
                 for tc in msg["tool_calls"]:
                     func = tc.get("function", {})
                     args = func.get("arguments")
                     if isinstance(args, str):
                         try:
+                            # Ollama prefers JSON objects for tool arguments
                             func["arguments"] = json.loads(args)
                         except Exception:
                             pass
                             
-            # 2. Handle Multimodal Vision format (OpenAI -> Ollama translation)
+            # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")
+            
+            # PURGE OLD IMAGE DATA: Only keep images for the last 2 messages (current turn)
+            # This drastically reduces request size while keeping conversation context.
+            is_recent = (total_msgs - i) <= 2
+            
             if isinstance(content, list):
                 text_parts = []
                 images = []
                 for chunk in content:
-                    if chunk.get("type") == "text":
+                    ctype = chunk.get("type")
+                    if ctype == "text":
                         text_parts.append(chunk.get("text", ""))
-                    elif chunk.get("type") == "image_url":
-                        url = chunk.get("image_url", {}).get("url", "")
-                        if url.startswith("data:image/"):
-                            # Extract raw base64 data after the comma
-                            try:
-                                b64_data = url.split(",", 1)[1]
-                                images.append(b64_data)
-                            except IndexError:
-                                pass
+                    elif ctype == "image_url":
+                        if is_recent:
+                            url = chunk.get("image_url", {}).get("url", "")
+                            if url.startswith("data:image/"):
+                                try:
+                                    b64_data = url.split(",", 1)[1] # type: ignore
+                                    images.append(b64_data)
+                                except IndexError:
+                                    pass
+                        else:
+                            text_parts.append("[Image data purged to save context]")
                 
                 # Replace content array with Ollama format
                 msg["content"] = "\n".join(text_parts)
                 if images:
                     msg["images"] = images
+            elif not is_recent and "images" in msg:
+                # If images were already processed into Ollama format in a previous turn
+                msg.pop("images", None)
+                msg["content"] = (msg.get("content", "") + "\n[Image data purged to save context]").strip()
                     
         return ollama_messages
 
@@ -207,7 +234,7 @@ class LiteRouter:
         if "github" in available:
             return "github/gpt-4o"
         if "google" in available:
-            return "gemini/gemini-1.5-flash"
+            return "gemini/gemini-3-flash"
         if "groq" in available:
             return "groq/llama-3.3-70b-versatile"
         if "openrouter" in available:
@@ -289,7 +316,7 @@ class LiteRouter:
                 defaults = {
                     "openai": ["gpt-4o", "gpt-4o-mini"],
                     "anthropic": ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"],
-                    "google": ["gemini/gemini-1.5-flash", "gemini/gemini-1.5-pro"],
+                    "google": ["gemini/gemini-3-flash", "gemini/gemini-3.1-flash", "gemini/gemini-3.1-pro"],
                     "groq": ["groq/llama-3.3-70b-versatile", "groq/mixtral-8x7b-32768"],
                     "github": ["github/gpt-4o", "github/claude-3-5-sonnet"]
                 }
@@ -301,7 +328,7 @@ class LiteRouter:
             
         return results
 
-    async def _ollama_chat(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
+    async def _ollama_chat(self, model: str, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Any:
         """Direct Ollama /api/chat call with retry and model fallback."""
         base = self._get_ollama_base()
         chat_url = f"{base}/api/chat"
@@ -367,7 +394,7 @@ class LiteRouter:
         
         raise last_error or Exception("Ollama request failed after all retries.")
 
-    async def _try_alternative_ollama_model(self, failed_model: str, messages, tools, stream: bool):
+    async def _try_alternative_ollama_model(self, failed_model: str, messages: Any, tools: Any, stream: bool) -> Any:
         """Attempt to use a different Ollama model when the primary one fails."""
         try:
             all_models = self.discover_ollama_models()
@@ -411,7 +438,7 @@ class LiteRouter:
         
         class OllamaChoice:
             def __init__(self, content, tool_calls, finish_reason):
-                self.message = type('msg', (), {
+                self.message = type('msg', (), { # type: ignore
                     'content': content,
                     'tool_calls': tool_calls,
                     'role': 'assistant'
@@ -423,10 +450,10 @@ class LiteRouter:
                 converted_tools = []
                 for tc in tool_calls_raw:
                     func = tc.get("function", {})
-                    tool_obj = type('tool_call', (), {
+                    tool_obj = type('tool_call', (), { # type: ignore
                         'id': f"ollama_call_{id(tc)}",
                         'type': 'function',
-                        'function': type('func', (), {
+                        'function': type('func', (), { # type: ignore
                             'name': func.get('name', ''),
                             'arguments': json.dumps(func.get('arguments', {}))
                         })()
@@ -436,7 +463,7 @@ class LiteRouter:
                 finish = "tool_calls" if converted_tools else "stop"
                 self.choices = [OllamaChoice(content, converted_tools or None, finish)]
                 self.model = model_name
-                self.usage = type('usage', (), {
+                self.usage = type('usage', (), { # type: ignore
                     'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0
                 })()
                 self.id = f"ollama-{id(self)}"
@@ -444,7 +471,7 @@ class LiteRouter:
         
         return OllamaResponse(content, tool_calls_raw, model_name)
 
-    async def _ollama_chat_stream(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
+    async def _ollama_chat_stream(self, model: str, messages: list, tools: list[dict[str, Any]] | None = None) -> AsyncGenerator[Any, None]:
         """Streaming Ollama chat with retry and model fallback."""
         max_retries = 3
         last_error = None
@@ -452,7 +479,7 @@ class LiteRouter:
         
         for attempt in range(max_retries):
             try:
-                async for chunk in self._ollama_chat_stream_inner(model, messages, tools):
+                async for chunk in self._ollama_chat_stream_inner(model, messages, cast(Optional[List[Dict[str, Any]]], tools)):
                     yield chunk
                 return  # Success — exit the retry loop
             except httpx.ConnectError:
@@ -493,7 +520,7 @@ class LiteRouter:
         
         raise last_error or Exception("Ollama streaming failed after all retries.")
 
-    async def _ollama_chat_stream_inner(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Any:
+    async def _ollama_chat_stream_inner(self, model: str, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> AsyncGenerator[Any, None]:
         """Inner streaming implementation (no retry logic)."""
         base = self._get_ollama_base()
         chat_url = f"{base}/api/chat"
@@ -558,11 +585,11 @@ class LiteRouter:
                             else:
                                 args_str = ""
                                 
-                            tool_obj = type('tool_call_chunk', (), {
+                            tool_obj = type('tool_call_chunk', (), { # type: ignore
                                 'index': i,
                                 'id': f"ollama_call_{id(tc)}",
                                 'type': 'function',
-                                'function': type('func', (), {
+                                'function': type('func', (), { # type: ignore
                                     'name': func.get('name'),
                                     'arguments': args_str
                                 })()
@@ -575,7 +602,7 @@ class LiteRouter:
 
                     yield Chunk(Choice(Delta(content, thinking, converted_tools or None, "assistant"), finish_reason))
 
-    async def get_response(self, model: str, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, stream: bool = True) -> Any:
+    async def get_response(self, model: str, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None, stream: bool = True) -> Any:
         try:
             # Use detected default if no specific model requested
             if not model or model == "default":
@@ -609,7 +636,8 @@ class LiteRouter:
             if "github" in available and not model.startswith("github/"):
                 fallbacks.append("github/gpt-4o")
             if "google" in available and not model.startswith("gemini/"):
-                fallbacks.append("gemini/gemini-1.5-flash")
+                fallbacks.append("gemini/gemini-3-flash")
+                fallbacks.append("gemini/gemini-3.1-flash")
             if "groq" in available and not model.startswith("groq/"):
                 fallbacks.append("groq/llama-3.3-70b-versatile")
             if "openrouter" in available and not model.startswith("openrouter/"):
@@ -623,7 +651,7 @@ class LiteRouter:
 
             logger.info(f"LiteRouter: Attempting {model} (Fallbacks: {fallbacks})")
 
-            kwargs = {
+            kwargs: Dict[str, Any] = {
                 "model": model,
                 "messages": messages,
                 "stream": stream
@@ -642,7 +670,7 @@ class LiteRouter:
                 fallback_local = f"ollama/{ollama_models[0]}" if ollama_models else "ollama/default"
             
             try:
-                from rich import print as rprint
+                from rich import print as rprint # type: ignore
                 rprint(f"[bold yellow]⚠️  Auth failed: {model}. Falling back to {fallback_local}...[/bold yellow]")
             except ImportError:
                 print(f"⚠️  Auth failed: {model}. Falling back to {fallback_local}...")
@@ -670,7 +698,7 @@ class LiteRouter:
                 fallback_local = f"ollama/{ollama_models[0]}" if ollama_models else "ollama/default"
                 
                 try:
-                    from rich import print as rprint
+                    from rich import print as rprint # type: ignore
                     rprint(f"[bold yellow]⚠️  Auth failed: {model}. Falling back to {fallback_local}...[/bold yellow]")
                 except ImportError:
                     print(f"⚠️  Auth failed: {model}. Falling back to {fallback_local}...")

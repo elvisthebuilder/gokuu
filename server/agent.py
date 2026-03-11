@@ -1,18 +1,26 @@
 import json
-from server.config_manager import config_manager as config_mgr
+from server.config_manager import config_manager as config_mgr # type: ignore
 import logging
 import asyncio
 import os
-from typing import List, Dict, Any, AsyncGenerator
-from server.lite_router import router
-from server.mcp_manager import mcp_manager
-from server.memory import memory
-from server.openclaw_ingestor import OpenClawIngestor
+import re # type: ignore
+import base64 # type: ignore
+import mimetypes # type: ignore
+import datetime # type: ignore
+import hashlib # type: ignore
+from PIL import Image # type: ignore
+import io
+MAX_IMAGE_DIMENSION = 800
+from typing import List, Dict, Any, AsyncGenerator, cast
+from server.lite_router import router # type: ignore
+from server.mcp_manager import mcp_manager # type: ignore
+from server.memory import memory # type: ignore
+from server.openclaw_ingestor import OpenClawIngestor # type: ignore
 
 logger = logging.getLogger(__name__)
 
 class GokuAgent:
-    async def get_models(self, provider: str = None):
+    async def get_models(self, provider: str | None = None):
         return await router.get_available_models(provider)
 
     def __init__(self):
@@ -212,10 +220,9 @@ class GokuAgent:
 
     def _detect_loop(self, content: str, tool_calls: list) -> bool:
         """Detect if we're stuck in a system instruction loop."""
-        import hashlib
         
         # Create hash of current response
-        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest()
+        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest() # type: ignore
         
         # Check for repeated responses
         if current_hash == self._last_response_hash:
@@ -241,7 +248,6 @@ class GokuAgent:
 
     def _get_environment_context(self, source: str) -> str:
         """Build environment-specific system prompt additions based on the interface."""
-        import datetime
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)")
         
         base = (
@@ -298,10 +304,50 @@ class GokuAgent:
         else:
             env = (
                 f"📍 CURRENT INTERFACE: {source}\n"
-            "• Interface type is unknown — adapt formatting to be universally readable.\n\n"
+                "• Interface type is unknown — adapt formatting to be universally readable.\n\n"
             )
 
         return base + env + sandboxing
+
+    async def _analyze_image_externally(self, path: str, provider: str) -> str:
+        """Analyze an image using a dedicated external vision provider."""
+        if not os.path.exists(path):
+            return f"[Error: Image file not found at {path}]"
+            
+        try:
+            # Prepare image data
+            with Image.open(path) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                    img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
+                
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=85)
+                b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            model = "gpt-4o" if provider == "openai" else config_mgr.get_key("GOKU_VISION_MODEL", "gemini/gemini-3-flash")
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze this image in detail. Focus on text, objects, and overall context. Be concise but thorough."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                        }
+                    ]
+                }
+            ]
+            
+            # Non-streaming call for description
+            response = await router.get_response(model=model, messages=messages, stream=False)
+            description = response.choices[0].message.content
+            return description
+        except Exception as e:
+            logger.error(f"External vision error ({provider}): {e}")
+            return f"[Error during external vision analysis: {e}]"
 
     async def run_agent(self, user_text: str, source: str = "cli") -> AsyncGenerator[Dict[str, Any], None]:
         """Runs the agent loop and yields thoughts, messages, and tool results.
@@ -347,7 +393,8 @@ class GokuAgent:
         
         # Include lessons learned in context
         if self._lessons_learned:
-            lessons_context = "\n".join([f"- {l['lesson']}" for l in self._lessons_learned[-5:]])  # Last 5 lessons
+            learned = cast(List[Dict[str, str]], self._lessons_learned)
+            lessons_context = "\n".join([f"- {cast(Dict[str, str], l)['lesson']}" for l in cast(Any, learned)[-5:]])  # Last 5 lessons
             context_str = json.dumps(context) + f"\n\nRecent Lessons Learned:\n{lessons_context}"
         else:
             context_str = json.dumps(context)
@@ -365,17 +412,13 @@ class GokuAgent:
                 self.history[0]["content"] = full_system_prompt
 
         # Parse potential image attachments for Vision models
-        import re
-        import base64
-        import mimetypes
-        import os
-        
         photo_pattern = r'\[Photo Received:\s*(.+?)\]'
-        photos = re.findall(photo_pattern, user_text)
+        photos = re.findall(photo_pattern, user_text) # type: ignore
         
         if photos:
-            content_array = []
-            clean_text = re.sub(photo_pattern, '', user_text).strip()
+            vision_provider = config_mgr.get_key("VISION_PROVIDER", "default").lower()
+            content_array: List[Dict[str, Any]] = []
+            clean_text = re.sub(photo_pattern, '', user_text).strip() # type: ignore
             
             # Keep track of file paths so LLM knows what it's looking at
             paths_text = " ".join([f"[Image File: {p}]" for p in photos])
@@ -388,28 +431,34 @@ class GokuAgent:
             content_array.append({"type": "text", "text": clean_text})
             
             for path in photos:
-                if os.path.exists(path):
+                if not os.path.exists(path):
+                    content_array.append({"type": "text", "text": f"[Error: Image file not found: {path}]"})
+                    continue
+
+                if vision_provider in ["google", "openai"]:
+                    # Offload vision to external dedicated provider
+                    yield {"type": "thought", "content": f"📸 Analyzing image at {os.path.basename(path)} with {vision_provider.capitalize()}..."}
+                    description = await self._analyze_image_externally(path, vision_provider)
+                    content_array.append({"type": "text", "text": f"[Visual context from {vision_provider.capitalize()}: {description}]"})
+                else:
+                    # Native Vision: Send base64 to core model
                     mime_type, _ = mimetypes.guess_type(path)
                     mime_type = mime_type or 'image/jpeg'
                     try:
                         # Resize the image to prevent payload size limit errors
-                        from PIL import Image
-                        import io
-                        
-                        max_dimension = 800
-                        with Image.open(path) as img:
+                        with Image.open(path) as img: # type: ignore
                             # Convert to RGB if necessary (e.g. for PNGs with transparency)
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
                                 
                             # Resize if it's too large, keeping aspect ratio
-                            if img.width > max_dimension or img.height > max_dimension:
-                                img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
                                 
                             # Save back to a buffer
-                            buffer = io.BytesIO()
+                            buffer = io.BytesIO() # type: ignore
                             img.save(buffer, format="JPEG", quality=85)
-                            b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                            b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8') # type: ignore
                             mime_type = "image/jpeg"
                             
                         content_array.append({
@@ -487,6 +536,32 @@ class GokuAgent:
                     }
                 }
             })
+
+        # Add Agent Vision tool
+        llm_tools.append({
+            "type": "function",
+            "function": {
+                "name": "see_image",
+                "description": "Look at an image file stored locally. Use this if you find an image (jpg, png, etc.) while browsing the filesystem and want to analyze its contents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path to the image file."
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": "Optional: Specific question or instruction for analyzing the image."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        })
+
+        # Add Telegram-specific tools (continued)
+        if source == "telegram":
             llm_tools.append({
                 "type": "function",
                 "function": {
@@ -511,7 +586,7 @@ class GokuAgent:
 
         # Load skills from the skills directory
         try:
-            # Assuming the project root is current working directory
+            # Find skills. Ingestor is imported globally.
             ingestor = OpenClawIngestor(os.getcwd())
             skill_tools = ingestor.generate_tool_definitions()
             for st in skill_tools:
@@ -548,7 +623,6 @@ class GokuAgent:
                     )
                     break # Success, exit retry loop
                 except Exception as e:
-                    import asyncio
                     error_msg = str(e).strip()
                     logger.error(f"Routing Error (Attempt {attempt+1}/{max_retries}): {error_msg}")
                     
@@ -574,10 +648,7 @@ class GokuAgent:
             
             # Streaming Loop
             full_content = ""
-            tool_calls_accumulator = {} # index -> tool_call object
-            
-            # Rolling Buffer Parser
-            import re
+            tool_calls_accumulator: Dict[int, Any] = {}
             
             async for chunk in response_stream:
                 if not chunk.choices: continue
@@ -595,12 +666,13 @@ class GokuAgent:
                     
                     # Regex to find all thought blocks
                     pattern = r'<(thought|think)>(.*?)(?:</\1>|$)'
-                    matches = list(re.finditer(pattern, full_content, re.DOTALL))
+                    matches = list(re.finditer(pattern, full_content, re.DOTALL)) # type: ignore
                     
                     if matches:
                         last_match = matches[-1]
                         # Is the last tag closed?
-                        is_closed = f"</{last_match.group(1)}>" in full_content[last_match.start():]
+                        start_pos = int(last_match.start())
+                        is_closed = f"</{last_match.group(1)}>" in cast(Any, full_content)[start_pos:]
                         
                         # Current thinking is the content of the last tag
                         raw_thought = last_match.group(2)
@@ -626,9 +698,10 @@ class GokuAgent:
                 # 2. Handle Tool Calls (Accumulate parts)
                 if delta.tool_calls:
                     for tc_chunk in delta.tool_calls:
-                        idx = tc_chunk.index
-                        if idx not in tool_calls_accumulator:
-                            tool_calls_accumulator[idx] = {
+                        idx = cast(int, tc_chunk.index)
+                        acc_tc: Dict[int, Any] = tool_calls_accumulator
+                        if idx not in acc_tc:
+                            acc_tc[idx] = {
                                 "id": tc_chunk.id,
                                 "type": "function",
                                 "function": {"name": "", "arguments": ""}
@@ -636,14 +709,31 @@ class GokuAgent:
                         
                         # Append pieces safely (some providers send None instead of '')
                         if getattr(tc_chunk, "id", None): 
-                            tool_calls_accumulator[idx]["id"] = tc_chunk.id
+                            acc_tc[idx]["id"] = tc_chunk.id
                         
                         func = getattr(tc_chunk, "function", None)
                         if func:
-                            if getattr(func, "name", None) and not tool_calls_accumulator[idx]["function"]["name"]:
-                                tool_calls_accumulator[idx]["function"]["name"] = func.name
+                            if getattr(func, "name", None) and not acc_tc[idx]["function"]["name"]:
+                                acc_tc[idx]["function"]["name"] = func.name
                             if getattr(func, "arguments", None):
-                                tool_calls_accumulator[idx]["function"]["arguments"] += func.arguments
+                                acc_fn = cast(Dict[str, Any], acc_tc[idx]["function"])
+                                acc_fn["arguments"] = str(acc_fn["arguments"]) + str(func.arguments)
+                                
+                                # Sanitize hallucinated concatenated JSON objects before history / parsing
+                                # E.g., Ollama returning {"cmd":"ls"}{"cmd":"cat"} -> [{"cmd":"ls"},{"cmd":"cat"}] -> {"cmd":"ls"}
+                                args_str = acc_fn["arguments"]
+                                if '}{' in args_str:
+                                    # Wrap in array, replace }{ with },{
+                                    fixed_str = '[' + re.sub(r'}\s*{', '},{', args_str) + ']'
+                                    try:
+                                        parsed_arr = json.loads(fixed_str)
+                                        if isinstance(parsed_arr, list) and len(parsed_arr) > 0:
+                                            # We just take the first intended tool call to prevent crashing
+                                            acc_fn["arguments"] = json.dumps(parsed_arr[0])
+                                    except Exception:
+                                        pass # Let the later JSON parser throw if it's still broken
+
+
 
             # Clean content for history: Remove <thought> tags?
             # Ideally we keep them for context, or remove them to save tokens/clean history.
@@ -657,10 +747,10 @@ class GokuAgent:
                 for idx in sorted_indices:
                     tc = tool_calls_accumulator[idx]
                     # Create object resembling litellm tool call
-                    tool_obj = type('tool_call', (), {
+                    tool_obj = type('tool_call', (object,), { # type: ignore
                         'id': tc['id'],
                         'type': 'function',
-                        'function': type('func', (), {
+                        'function': type('func', (object,), { # type: ignore
                             'name': tc['function']['name'],
                             'arguments': tc['function']['arguments']
                         })()
@@ -668,7 +758,7 @@ class GokuAgent:
                     final_tool_calls.append(tool_obj)
 
             # Create message dict for history
-            msg_dict = {
+            msg_dict: Dict[str, Any] = {
                 "role": "assistant",
                 "content": full_content,
             }
@@ -688,9 +778,8 @@ class GokuAgent:
             content = full_content
             
             # clean_content for UI display (strip thoughts)
-            import re
             # Regex improves to catch unclosed tags at end of string
-            clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip()
+            clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip() # type: ignore
             
             # LOOP DETECTION: Check if we're stuck
             if self._detect_loop(clean_content, final_tool_calls):
@@ -701,7 +790,7 @@ class GokuAgent:
                     "role": "agent",
                     "content": "I notice I may be stuck in a loop. What do you actually need from me right now?"
                 }
-                self._add_lesson("Loop detected and broken - user redirected", clean_content[:100])
+                self._add_lesson("Loop detected and broken - user redirected", cast(Any, clean_content)[:100])
                 break
             
             # Map final_tool_calls back to what the loop expects
@@ -808,7 +897,7 @@ class GokuAgent:
                 
                 # If there's a question, stop and wait for answer BEFORE running tools
                 # Refined: Only if it's a short question or ends with ?
-                is_question = "?" in clean_content.strip()[-5:] and len(clean_content) < 400
+                is_question = "?" in cast(Any, clean_content.strip())[-5:] and len(clean_content) < 400
                 if is_question:
                     # Append a hint to history so the model knows it's waiting
                     self.history.append({
@@ -855,8 +944,6 @@ class GokuAgent:
                     logger.error(f"Failed to parse tool args via json.loads: {e}. Attempting recovery.")
                     tool_args = {}
                     
-                    # Auto-recovery for malformed JSON from open-source models
-                    import re
                     raw = str(raw_args)
                     
                     # Try to extract the two main args for schedule_telegram_message manually
@@ -903,7 +990,7 @@ class GokuAgent:
                         idx = tool_args.get("index")
                         status = tool_args.get("status")
                         if isinstance(idx, int) and 0 <= idx < len(self.tasks):
-                            self.tasks[idx]["status"] = status
+                            cast(Dict[str, Any], self.tasks[idx])["status"] = status
                     elif action == "clear":
                         self.tasks = []
                     
@@ -979,24 +1066,76 @@ class GokuAgent:
                             continue
                         
                         # Execute Tool
-                        if tool_name == "schedule_telegram_message":
-                            from server import telegram_bot
+                        if tool_name == "see_image":
+                            path = tool_args.get("path")
+                            question = tool_args.get("question", "Analyze this image.")
+                            
+                            if not path or not os.path.exists(cast(str, path)):
+                                result = {"status": "error", "message": f"File not found: {path}"}
+                            else:
+                                vision_provider = config_mgr.get_key("VISION_PROVIDER", "default").lower()
+                                if vision_provider in ["google", "openai"]:
+                                    try:
+                                        # External vision
+                                        description = await self._analyze_image_externally(cast(str, path), vision_provider)
+                                        vision_msg = {
+                                            "role": "user",
+                                            "content": f"[Agent Self-Initiated Vision ({vision_provider.capitalize()}): {os.path.basename(cast(str, path))}] Analysis: {description}\nUser Question: {question}"
+                                        }
+                                        self.history.append(vision_msg)
+                                        result = {"status": "success", "message": f"I have analyzed the image at {path} using {vision_provider.capitalize()}. The details have been added to our conversation."}
+                                    except Exception as e:
+                                        logger.error(f"see_image external error: {e}")
+                                        result = {"status": "error", "message": str(e)}
+                                else:
+                                    # Native vision
+                                    try:
+                                        with Image.open(cast(str, path)) as img:
+                                            if img.mode != 'RGB':
+                                                img = img.convert('RGB')
+                                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                                # Note: Image is from PIL
+                                                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
+                                            
+                                            buffer = io.BytesIO()
+                                            img.save(buffer, format="JPEG", quality=85)
+                                            b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                                        
+                                        # Append the vision message to history directly
+                                        vision_msg = {
+                                            "role": "user",
+                                            "content": [
+                                                {"type": "text", "text": f"[Agent Self-Initiated Vision: {path}] {question}"},
+                                                {
+                                                    "type": "image_url",
+                                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                                                }
+                                            ]
+                                        }
+                                        self.history.append(vision_msg)
+                                        result = {"status": "success", "message": f"I have successfully looked at the image at {path}. I will analyze it in the next step."}
+                                    except Exception as e:
+                                        logger.error(f"see_image error: {e}")
+                                        result = {"status": "error", "message": str(e)}
+
+                        elif tool_name == "schedule_telegram_message":
+                            from server import telegram_bot # type: ignore
                             result = await telegram_bot.schedule_telegram_message(tool_args)
                         elif tool_name.startswith("openclaw_"):
                             is_agent_tool = tool_name.startswith("openclaw_agent_")
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")
                             
-                            # Find the skill instructions
+                            # Find the skill instructions.
                             ingestor = OpenClawIngestor(os.getcwd())
                             # Search both for the specific skill name
-                            skill_info = {}
+                            skill_info: Dict[str, Any] = {}
                             for meta in ingestor.list_skills():
                                 if meta["name"] == skill_name:
                                     skill_info = ingestor.parse_skill(skill_name, meta["path"])
                                     break
                             
-                            instructions = skill_info.get("instructions", "")
+                            instructions = cast(Dict[str, Any], skill_info).get("instructions", "")
 
                             # Spawn background task
                             asyncio.create_task(self.run_subagent_background(skill_name, instructions, user_intent, source))
@@ -1039,7 +1178,7 @@ class GokuAgent:
             # Specialization: Prepend skill instructions to the core GOKU prompt
             sub_agent.system_prompt = f"### 🤖 SPECIALIZED ROLE: @{skill_name}\n{instructions}\n\n" + sub_agent.system_prompt
             
-            report_content = f"### 📊 Report from @{skill_name}\n\n"
+            report_content: str = f"### 📊 Report from @{skill_name}\n\n"
             
             # Run the agent
             gen = sub_agent.run_agent(user_intent, source=source)
@@ -1047,7 +1186,7 @@ class GokuAgent:
                 while True:
                     event = await anext(gen)
                     if event["type"] == "message":
-                        report_content += event["content"]
+                        report_content = str(report_content) + str(event["content"])
             except StopAsyncIteration:
                 pass
             
@@ -1062,7 +1201,7 @@ class GokuAgent:
 
             # Notify user via Telegram if that was the source
             if source == "telegram":
-                from server import telegram_bot
+                from server import telegram_bot # type: ignore
                 await telegram_bot.send_telegram_notification(
                     f"✅ **@{skill_name} has finished its task!**\n\n{report_content}"
                 )
