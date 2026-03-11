@@ -28,13 +28,26 @@ class MCPManager:
                     response = await client.get(f"{url}/tools", timeout=5.0)
                     if response.status_code == 200:
                         tools = response.json()
-                        # Namespace tools to avoid collisions
+                        # Namespace tools to avoid collisions and wrap in OpenAI format
                         for tool in tools:
-                            tool["name"] = f"mcp_{name}__{tool['name']}"
-                        all_tools.extend(tools)
-                except Exception:
-                    # Silence errors for external MCP servers when offline
-                    pass
+                            # 1. Detect if it's already in OpenAI format or flat MCP format
+                            if "function" in tool and "name" in tool["function"]:
+                                tool["function"]["name"] = f"mcp_{name}__{tool['function']['name']}"
+                                all_tools.append(tool)
+                            elif "name" in tool:
+                                # Normalizing flat MCP tool into OpenAI format
+                                normalized_tool = {
+                                    "type": "function",
+                                    "function": {
+                                        "name": f"mcp_{name}__{tool['name']}",
+                                        "description": tool.get("description", ""),
+                                        "parameters": tool.get("parameters", tool.get("inputSchema", {"type": "object", "properties": {}}))
+                                    }
+                                }
+                                all_tools.append(normalized_tool)
+                except Exception as e:
+                    # Log as info/warning instead of error to avoid alarming the user if optional servers are down
+                    logger.info(f"Optional MCP server '{name}' at {url} is unreachable. Skipping.")
         
         # Add Native Bash tool (Superior feature)
         all_tools.append({
@@ -147,6 +160,9 @@ class MCPManager:
                     actual_stdout = "\n".join(output[:-1]) # type: ignore
                 else:
                     actual_stdout = result.stdout
+
+                if not actual_stdout and result.returncode == 0:
+                    actual_stdout = "[Command executed successfully with no output]"
 
                 return {
                     "stdout": actual_stdout,

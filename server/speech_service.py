@@ -2,6 +2,10 @@ import os
 import httpx # type: ignore
 import logging
 from typing import Optional
+from dotenv import load_dotenv # type: ignore
+
+# Path to .env (project root)
+ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -10,8 +14,8 @@ ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 OPENAI_STT_URL = "https://api.openai.com/v1/audio/transcriptions"
 
-# Default ElevenLabs Voice ID (Roger)
-DEFAULT_VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"
+# Default ElevenLabs Voice ID (Liam)
+DEFAULT_VOICE_ID = "TX3LPaxmHKxFdv7VOQHJ"
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
 async def transcribe_audio(file_path: str) -> Optional[str]:
@@ -19,6 +23,9 @@ async def transcribe_audio(file_path: str) -> Optional[str]:
     Transcribe an audio file using Groq (fastest), ElevenLabs (Scribe), or OpenAI.
     Gracefully returns None if no STT keys are configured.
     """
+    # Hot-reload environment
+    load_dotenv(ENV_PATH, override=True)
+    
     groq_api_key = os.getenv("GROQ_API_KEY")
     openai_api_key = os.getenv("OPENAI_API_KEY")
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
@@ -72,6 +79,9 @@ async def generate_speech(text: str, output_path: str) -> bool:
     Generate speech from text using ElevenLabs.
     Gracefully returns False if the ElevenLabs key is not configured.
     """
+    # Hot-reload environment
+    load_dotenv(ENV_PATH, override=True)
+    
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_VOICE_ID)
 

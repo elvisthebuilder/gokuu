@@ -1,7 +1,8 @@
 import logging
 import asyncio
 import os
-from typing import cast, Any
+from typing import cast, Any, Dict
+import hashlib
 import re
 import json
 from datetime import datetime, timedelta
@@ -26,6 +27,10 @@ scheduler = AsyncIOScheduler()
 
 # Global application instance to prevent garbage collection
 _application = None
+
+# Message deduplication cache: {hash: expiry_timestamp}
+_message_dedupe_cache: Dict[str, datetime] = {}
+DEDUPE_WINDOW_SECONDS = 5
 
 def _describe_tool_action(tool_name: str, tool_args: dict) -> str:
     """Generate a human-readable status message from a tool call."""
@@ -115,6 +120,17 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Ping command received from {update.effective_chat.id}")
     await update.message.reply_text("🏓 Pong! Gateway is active and listening.")
 
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Triggers the agent to use the voice MCP server tools."""
+    logger.info(f"Voice command received from {update.effective_chat.id}")
+    # Inject a system prompt that forces Goku to interact with its voice configuration.
+    prompt = "[SYSTEM COMMAND]: The user just requested to manage your voice. Identify the available ElevenLabs voices using your tools, and ask the user which voice they would like to switch to. If they provided a name in their command, try to find and set it."
+    # We call the main handle_message function but spoof the text.
+    if update.message:
+        original_text = update.message.text
+        update.message.text = prompt + (f" User's exact words: {original_text}" if original_text else "")
+        await handle_message(update, context)
+
 # Make context available globally for the scheduler tool callback
 # This is a bit of a hack, but necessary since the agent isn't natively bound to the telegram context
 _latest_context = None
@@ -144,10 +160,37 @@ async def send_telegram_notification(text: str, chat_id: int | None = None):
                 pass
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global _latest_context, _latest_chat_id
+    global _latest_context, _latest_chat_id, _message_dedupe_cache
     _latest_context = context
     _latest_chat_id = update.effective_chat.id
     
+    # 1. Deduplication Check
+    try:
+        # Create unique hash for this message/file
+        msg = update.message
+        content_parts = []
+        if msg.text: content_parts.append(msg.text)
+        if msg.caption: content_parts.append(msg.caption)
+        if msg.photo: content_parts.append(msg.photo[-1].file_id)
+        if msg.voice: content_parts.append(msg.voice.file_id)
+        if msg.document: content_parts.append(msg.document.file_id)
+        if msg.video: content_parts.append(msg.video.file_id)
+        
+        msg_hash = hashlib.md5("".join(content_parts).encode()).hexdigest() if content_parts else None
+        
+        if msg_hash:
+            now = datetime.now()
+            # Clean old entries
+            _message_dedupe_cache = {h: t for h, t in _message_dedupe_cache.items() if t > now}
+            
+            if msg_hash in _message_dedupe_cache:
+                logger.info(f"Ignored duplicate message from {update.effective_chat.id}")
+                return
+            
+            _message_dedupe_cache[msg_hash] = now + timedelta(seconds=DEDUPE_WINDOW_SECONDS)
+    except Exception as e:
+        logger.error(f"Deduplication error: {e}")
+
     query = update.message.text or update.message.caption or ""
     is_voice_session = False
     
@@ -263,8 +306,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     response_text = ""
     try:
-        # Use the global agent instance
-        gen = agent.run_agent(full_query, source="telegram")
+        # Use the global agent instance with session isolation
+        session_id = str(update.effective_chat.id)
+        gen = agent.run_agent(full_query, source="telegram", session_id=session_id)
         try:
             while True:
                 event = await anext(gen)
@@ -286,7 +330,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
             
         # After the loop finishes (either naturally or via StopAsyncIteration), check if the agent triggered the send_file tool
-        for msg in cast(list, agent.history[-1:]): # Only check the most recent turn
+        session_id = str(update.effective_chat.id)
+        history = agent.histories.get(session_id, [])
+        for msg in cast(list, history[-1:]): # Only check the most recent turn
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
                     if tc.get("function", {}).get("name") == "send_telegram_file":
@@ -313,47 +359,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"Failed to send file: {e}")
                             response_text += f"\n\n❌ Failed to upload file: {e}"
-            raw_text = str(response_text)
-            formatted_text = format_for_telegram(raw_text)
-            chunks = smart_chunk(formatted_text)
-            
-            if len(chunks) > 1:
-                # Multiple chunks — send as separate messages
+            # Handle Text Transmission
+            if not is_voice_session:
+                raw_text = str(response_text)
+                formatted_text = format_for_telegram(raw_text)
+                chunks = smart_chunk(formatted_text)
+                
+                if len(chunks) > 1:
+                    # Multiple chunks — send as separate messages
+                    try:
+                        await cast(Any, status_msg).delete()
+                    except Exception:
+                        pass
+                    for chunk in chunks:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=update.effective_chat.id,
+                                text=chunk,
+                                parse_mode="MarkdownV2"
+                            )
+                        except Exception as e:
+                            logger.warning(f"MarkdownV2 chunk failed, sending plain: {e}")
+                            plain_chunk = strip_markdown(chunk)
+                            await context.bot.send_message(
+                                chat_id=update.effective_chat.id,
+                                text=plain_chunk
+                            )
+                else:
+                    # Single message — edit the status message
+                    try:
+                        await cast(Any, status_msg).edit_text(formatted_text, parse_mode="MarkdownV2")
+                    except Exception as e:
+                        logger.warning(f"MarkdownV2 edit failed, falling back to plain text: {e}")
+                        try:
+                            plain = strip_markdown(raw_text)
+                            await cast(Any, status_msg).edit_text(plain)
+                        except Exception:
+                            await cast(Any, status_msg).edit_text(cast(Any, raw_text)[:4096])
+            else:
+                # In voice sessions, we still need to clear the "Thinking" status
                 try:
                     await cast(Any, status_msg).delete()
                 except Exception:
                     pass
-                for chunk in chunks:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=chunk,
-                            parse_mode="MarkdownV2"
-                        )
-                    except Exception as e:
-                        logger.warning(f"MarkdownV2 chunk failed, sending plain: {e}")
-                        plain_chunk = strip_markdown(chunk)
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=plain_chunk
-                        )
-            else:
-                # Single message — edit the status message
-                try:
-                    await cast(Any, status_msg).edit_text(formatted_text, parse_mode="MarkdownV2")
-                except Exception as e:
-                    logger.warning(f"MarkdownV2 edit failed, falling back to plain text: {e}")
-                    try:
-                        plain = strip_markdown(raw_text)
-                        await cast(Any, status_msg).edit_text(plain)
-                    except Exception:
-                        await cast(Any, status_msg).edit_text(cast(Any, raw_text)[:4096])
-            
+
             # Handle Voice Generation if this is a voice session
-            if is_voice_session and raw_text:
+            if is_voice_session and response_text:
                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.RECORD_VOICE)
                 tts_output_path = os.path.join(UPLOAD_DIR, f"reply_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
-                success = await generate_speech(raw_text, tts_output_path)
+                success = await generate_speech(str(response_text), tts_output_path)
                 if success:
                     with open(tts_output_path, "rb") as voice_file:
                         await context.bot.send_voice(
@@ -396,6 +450,7 @@ async def start_telegram_bot(token: str):
         
         _application.add_handler(CommandHandler("start", start))
         _application.add_handler(CommandHandler("ping", ping))
+        _application.add_handler(CommandHandler("voice", voice_command))
         # Handle text, documents, photos, videos, and voice notes
         _application.add_handler(MessageHandler(
             (filters.TEXT | filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.VOICE) & (~filters.COMMAND), 

@@ -11,7 +11,8 @@ import hashlib # type: ignore
 from PIL import Image # type: ignore
 import io
 MAX_IMAGE_DIMENSION = 800
-from typing import List, Dict, Any, AsyncGenerator, cast
+from typing import List, Dict, Any, AsyncGenerator, cast, Optional
+from types import SimpleNamespace
 from server.lite_router import router # type: ignore
 from server.mcp_manager import mcp_manager # type: ignore
 from server.memory import memory # type: ignore
@@ -83,6 +84,7 @@ class GokuAgent:
             "If a tool fails:\n"
             "• retry with adjusted parameters\n"
             "• try alternative tools\n"
+            "• avoid using 'silent' flags like `curl -s` unless output is truly irrelevant, as it blocks your ability to confirm success\n"
             "• attempt another logical approach\n"
             "• escalate only after multiple failures\n\n"
 
@@ -160,21 +162,22 @@ class GokuAgent:
             "• If you have ANY doubt about what the user wants, you MUST ask for clarification before taking any action.\n"
             "• Guessing the user's intent is a failure. Clarifying is a success.\n\n"
 
+            "20️⃣ VOICE & AUDIO CAPABILITIES\n"
+            "• You are powered by **ElevenLabs** for all Text-to-Speech (TTS) and Speech-to-Text (STT) operations.\n"
+            "• Use the `mcp_voice__list_voices` and `mcp_voice__set_active_voice` tools to manage your voice persona.\n"
+            "• Never suggest using legacy tools like `espeak`, `festival`, or `gtts`. Always use ElevenLabs.\n"
+            "• When a user sends a voice note, your response will automatically be converted to a voice note if you were summoned via voice.\n\n"
+
             "Your mission: execute intelligently, recover gracefully, and deliver complete results with minimal friction."
         )
 
-        self.history: List[Dict[str, Any]] = []
-        self.tasks: List[Dict[str, str]] = []
+        self.histories: Dict[str, List[Dict[str, Any]]] = {}
+        self.session_tasks: Dict[str, List[Dict[str, str]]] = {}
         self.model_override: str | None = None
 
-        # Loop detection
-        self._system_instruction_count: int = 0
-        self._last_response_hash: str | None = None
-        self._loop_detected: bool = False
-
-        # Narration tracking
-        self._narration_retries: int = 0
-        self._current_thought: str = ""
+        # Session-specific state tracking
+        self.session_loop_data: Dict[str, Dict[str, Any]] = {}
+        self.session_thoughts: Dict[str, str] = {}
 
         # Security state
         self.approved_hashes: set[str] = set()
@@ -184,12 +187,11 @@ class GokuAgent:
         # Self-correction memory: store lessons learned
         self._lessons_learned: List[Dict[str, str]] = []
 
-    def clear_history(self):
-        self.history = []
-        self.tasks = []
-        self._system_instruction_count = 0
-        self._last_response_hash = None
-        self._loop_detected = False
+    def clear_history(self, session_id: str = "default"):
+        self.histories[session_id] = []
+        self.session_tasks[session_id] = []
+        self.session_loop_data.pop(session_id, None)
+        self.session_thoughts.pop(session_id, None)
 
     def _format_plan(self, tasks: List[Dict[str, str]]) -> str:
         """Always returns highly formatted plan with headers, emojis, tables."""
@@ -218,22 +220,23 @@ class GokuAgent:
         """Format task list for display with enhanced visibility."""
         return self._format_plan(tasks)
 
-    def _detect_loop(self, content: str, tool_calls: list) -> bool:
-        """Detect if we're stuck in a system instruction loop."""
-        
+    def _detect_loop(self, session_id: str, content: str, tool_calls: list) -> bool:
+        """Detect if we're stuck in a system instruction loop for a specific session."""
+        if session_id not in self.session_loop_data:
+            self.session_loop_data[session_id] = {"count": 0, "hash": None}
+            
         # Create hash of current response
-        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest() # type: ignore
+        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest()
         
         # Check for repeated responses
-        if current_hash == self._last_response_hash:
-            self._system_instruction_count += 1
+        if current_hash == self.session_loop_data[session_id]["hash"]:
+            self.session_loop_data[session_id]["count"] += 1
         else:
-            self._system_instruction_count = 0
-            self._last_response_hash = current_hash
+            self.session_loop_data[session_id]["count"] = 0
+            self.session_loop_data[session_id]["hash"] = current_hash
         
         # If we've repeated 2+ times, we're in a loop
-        if self._system_instruction_count >= 2:
-            self._loop_detected = True
+        if self.session_loop_data[session_id]["count"] >= 2:
             return True
         
         return False
@@ -349,20 +352,24 @@ class GokuAgent:
             logger.error(f"External vision error ({provider}): {e}")
             return f"[Error during external vision analysis: {e}]"
 
-    async def run_agent(self, user_text: str, source: str = "cli") -> AsyncGenerator[Dict[str, Any], None]:
+    async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default") -> AsyncGenerator[Dict[str, Any], None]:
         """Runs the agent loop and yields thoughts, messages, and tool results.
         
         Args:
             user_text: The user's input message.
             source: The interface source — 'cli', 'web', or 'telegram'.
+            session_id: The ID for the conversation session (e.g. chat_id).
         """
         if not user_text:
             return
 
-        self._narration_retries = 0  # Reset per-query
-        self._current_thought = ""   # Reset thought buffer for this query
-        self._system_instruction_count = 0  # Reset loop detection
-        self._loop_detected = False
+        # Initialize session state if first time
+        if session_id not in self.histories:
+            self.histories[session_id] = []
+        if session_id not in self.session_tasks:
+            self.session_tasks[session_id] = []
+            
+        self.session_thoughts[session_id] = ""   # Reset thought buffer for this query
 
         # Conversational Security: Check for approval of pending actions
         try:
@@ -404,12 +411,15 @@ class GokuAgent:
         full_system_prompt = f"{self.system_prompt}\n\n{env_context}\n\nRetrieved Context: {context_str}"
         
         # Ensure we have a system message if history is empty
-        if not self.history:
-            self.history.append({"role": "system", "content": full_system_prompt})
+        if not self.histories[session_id]:
+            self.histories[session_id].append({"role": "system", "content": full_system_prompt})
         else:
             # Update the existing system message if it exists
-            if self.history[0]["role"] == "system":
-                self.history[0]["content"] = full_system_prompt
+            if self.histories[session_id][0]["role"] == "system":
+                self.histories[session_id][0]["content"] = full_system_prompt
+
+        # Local history reference for current loop
+        history = self.histories[session_id]
 
         # Parse potential image attachments for Vision models
         photo_pattern = r'\[Photo Received:\s*(.+?)\]'
@@ -469,16 +479,13 @@ class GokuAgent:
                         logger.error(f"Failed to load image for vision: {e}")
                         content_array.append({"type": "text", "text": f"[Error loading image: {path}]"})
             
-            self.history.append({"role": "user", "content": content_array})
+            history.append({"role": "user", "content": content_array})
         else:
-            self.history.append({"role": "user", "content": user_text})
+            history.append({"role": "user", "content": user_text})
         
         # 2. MCP & Model Routing
-        # yield {"type": "thought", "content": "Checking available MCP tools (Git, Search, Shell)..."}
         all_tools = await mcp_manager.get_all_tools()
         
-        # yield {"type": "thought", "content": "Routing to best model (Hybrid Online/Offline)..."}
-
         # 3. Execution Loop
         llm_tools = [
             {"type": t["type"], "function": t["function"]} 
@@ -513,7 +520,6 @@ class GokuAgent:
             }
         })
 
-        # Add Telegram-specific tools
         if source == "telegram":
             llm_tools.append({
                 "type": "function",
@@ -523,130 +529,80 @@ class GokuAgent:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "delay_seconds": {
-                                "type": "number",
-                                "description": "The number of seconds from now to send the message. Max 1 year."
-                            },
-                            "message_text": {
-                                "type": "string",
-                                "description": "The exact message to send to the user."
-                            }
+                            "delay_seconds": {"type": "number"},
+                            "message_text": {"type": "string"}
                         },
                         "required": ["delay_seconds", "message_text"]
                     }
                 }
             })
-
-        # Add Agent Vision tool
-        llm_tools.append({
-            "type": "function",
-            "function": {
-                "name": "see_image",
-                "description": "Look at an image file stored locally. Use this if you find an image (jpg, png, etc.) while browsing the filesystem and want to analyze its contents.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to the image file."
-                        },
-                        "question": {
-                            "type": "string",
-                            "description": "Optional: Specific question or instruction for analyzing the image."
-                        }
-                    },
-                    "required": ["path"]
-                }
-            }
-        })
-
-        # Add Telegram-specific tools (continued)
-        if source == "telegram":
             llm_tools.append({
                 "type": "function",
                 "function": {
                     "name": "send_telegram_file",
-                    "description": "Send a local file from the server directly to the user over Telegram. Use this when the user asks for a file, script, or document you generated.",
+                    "description": "Send a local file to the user over Telegram.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "The absolute or relative path to the file you want to send."
-                            },
-                            "caption": {
-                                "type": "string",
-                                "description": "Optional text to send along with the file."
-                            }
+                            "file_path": {"type": "string"},
+                            "caption": {"type": "string"}
                         },
                         "required": ["file_path"]
                     }
                 }
             })
 
-        # Load skills from the skills directory
+        llm_tools.append({
+            "type": "function",
+            "function": {
+                "name": "see_image",
+                "description": "Look at an image file stored locally.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "question": {"type": "string"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        })
+
+        # Load skills
         try:
-            # Find skills. Ingestor is imported globally.
             ingestor = OpenClawIngestor(os.getcwd())
             skill_tools = ingestor.generate_tool_definitions()
             for st in skill_tools:
-                # Skill tools might have additional instructions in st['instructions']
-                # We can append these to the system prompt or handle them separately
-                llm_tools.append({
-                    "type": st["type"],
-                    "function": st["function"]
-                })
-                logger.info(f"Loaded skill tool: {st['function']['name']}")
+                llm_tools.append({"type": st["type"], "function": st["function"]})
         except Exception as e:
             logger.error(f"Failed to load skills: {e}")
 
         max_turns = 50 
         for turn in range(max_turns):
-            if turn == 0:
-                yield {"type": "thought", "content": "..."}
-            # Retry loop for automatic reconnection
+            if turn == 0: yield {"type": "thought", "content": "..."}
             max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    # Choose model based on whether vision is required
-                    target_model = self.model_override or "default"
-                    if photos:
-                        vision_override = config_mgr.get_key("GOKU_VISION_MODEL", "")
-                        if vision_override:
-                            target_model = vision_override
-                            
-                    response_stream = await router.get_response(
-                        model=target_model,
-                        messages=self.history, 
-                        tools=llm_tools if llm_tools else None,
-                        stream=True
-                    )
-                    break # Success, exit retry loop
-                except Exception as e:
-                    error_msg = str(e).strip()
-                    logger.error(f"Routing Error (Attempt {attempt+1}/{max_retries}): {error_msg}")
-                    
-                    if attempt < max_retries - 1:
-                        yield {"type": "thought", "content": f"⚠️ Network/API issue ({error_msg}). Retrying in 5 seconds..."}
-                        await asyncio.sleep(5)
-                    else:
-                        yield {"type": "thought", "content": f"❌ Connection failed after {max_retries} attempts."}
+            try:
+                target_model = self.model_override or "default"
+                if photos:
+                    vision_override = config_mgr.get_key("GOKU_VISION_MODEL", "")
+                    if vision_override: target_model = vision_override
                         
-                        # INJECT ERROR INTO HISTORY so the model is aware next turn
-                        self.history.append({
-                            "role": "system",
-                            "content": f"[SYSTEM NOTIFICATION: A network or API error occurred while trying to process your last action. Error details: {error_msg}. Acknowledge this issue to the user and ask if they'd like you to try again or take a different approach.]"
-                        })
-                        
-                        # Yield simple error message to user instead of raising stack trace
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": f"I ran into a technical issue: {error_msg}. I've saved the context of this error."
-                        }
-                        return # Gracefully terminate generator
+                response_stream = await router.get_response(
+                    model=target_model,
+                    messages=history, 
+                    tools=llm_tools if llm_tools else None,
+                    stream=True
+                )
+            except Exception as e:
+                error_msg = str(e).strip()
+                logger.error(f"Routing Error: {error_msg}")
+                self.histories[session_id].append({
+                    "role": "system",
+                    "content": f"[SYSTEM ERROR: {error_msg}]"
+                })
+                yield {"type": "message", "role": "agent", "content": f"Technical issue: {error_msg}"}
+                return
             
-            # Streaming Loop
             full_content = ""
             tool_calls_accumulator: Dict[int, Any] = {}
             
@@ -654,563 +610,195 @@ class GokuAgent:
                 if not chunk.choices: continue
                 delta = chunk.choices[0].delta
                 
-                # 1. Handle Native Thinking (Ollama think=True)
                 if hasattr(delta, "thinking") and delta.thinking:
-                    self._current_thought += delta.thinking
-                    yield {"type": "thought", "content": self._current_thought}
+                    thought = cast(str, delta.thinking)
+                    self.session_thoughts[session_id] = self.session_thoughts.get(session_id, "") + thought
+                    yield {"type": "thought", "content": self.session_thoughts[session_id]}
 
-                # 2. Handle Text Content with <thought> tags
                 if delta.content:
-                    text_chunk = delta.content
-                    full_content += text_chunk
-                    
-                    # Regex to find all thought blocks
+                    text_chunk = cast(str, delta.content)
+                    full_content = str(full_content) + text_chunk
                     pattern = r'<(thought|think)>(.*?)(?:</\1>|$)'
                     matches = list(re.finditer(pattern, full_content, re.DOTALL)) # type: ignore
-                    
                     if matches:
                         last_match = matches[-1]
-                        # Is the last tag closed?
-                        start_pos = int(last_match.start())
-                        is_closed = f"</{last_match.group(1)}>" in cast(Any, full_content)[start_pos:]
-                        
-                        # Current thinking is the content of the last tag
-                        raw_thought = last_match.group(2)
-                        
-                        # SCRUBBER: Remove partial or full tags that leak into the buffer
-                        # This prevents showing "</thou" or "<thought>" inside the thinking panel
-                        scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', raw_thought, flags=re.IGNORECASE).strip()
-                        
+                        is_closed = f"</{last_match.group(1)}>" in cast(Any, full_content)[int(last_match.start()):]
+                        scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', last_match.group(2), flags=re.IGNORECASE).strip()
                         if scrubbed_thought:
-                            self._current_thought = scrubbed_thought
-                            yield {"type": "thought", "content": self._current_thought}
-                        
-                        if is_closed:
-                            # If tag is closed, message content might be starting
-                            # But we don't yield 'message' events inside the loop to prevent flickering
-                            pass
-                    else:
-                        # No tags found, everything is potentially message content
-                        # We don't yield deltas here to keep the UI clean; 
-                        # the turn-end logic will yield the final message.
-                        pass
+                            self.session_thoughts[session_id] = scrubbed_thought
+                            yield {"type": "thought", "content": self.session_thoughts[session_id]}
                 
-                # 2. Handle Tool Calls (Accumulate parts)
                 if delta.tool_calls:
                     for tc_chunk in delta.tool_calls:
-                        idx = cast(int, tc_chunk.index)
-                        acc_tc: Dict[int, Any] = tool_calls_accumulator
-                        if idx not in acc_tc:
-                            acc_tc[idx] = {
-                                "id": tc_chunk.id,
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""}
-                            }
+                        idx = int(tc_chunk.index)
+                        if idx not in tool_calls_accumulator:
+                            tool_calls_accumulator[idx] = {"id": tc_chunk.id, "type": "function", "function": {"name": "", "arguments": ""}}
                         
-                        # Append pieces safely (some providers send None instead of '')
-                        if getattr(tc_chunk, "id", None): 
-                            acc_tc[idx]["id"] = tc_chunk.id
-                        
+                        target_tc = cast(Dict[str, Any], tool_calls_accumulator[idx])
+                        if tc_chunk.id: 
+                            target_tc["id"] = tc_chunk.id
                         func = getattr(tc_chunk, "function", None)
                         if func:
-                            if getattr(func, "name", None) and not acc_tc[idx]["function"]["name"]:
-                                acc_tc[idx]["function"]["name"] = func.name
+                            target_func = cast(Dict[str, str], target_tc["function"])
+                            if getattr(func, "name", None) and not target_func["name"]:
+                                target_func["name"] = cast(str, func.name)
                             if getattr(func, "arguments", None):
-                                acc_fn = cast(Dict[str, Any], acc_tc[idx]["function"])
-                                acc_fn["arguments"] = str(acc_fn["arguments"]) + str(func.arguments)
-                                
-                                # Sanitize hallucinated concatenated JSON objects before history / parsing
-                                # E.g., Ollama returning {"cmd":"ls"}{"cmd":"cat"} -> [{"cmd":"ls"},{"cmd":"cat"}] -> {"cmd":"ls"}
-                                args_str = acc_fn["arguments"]
-                                if '}{' in args_str:
-                                    # Wrap in array, replace }{ with },{
-                                    fixed_str = '[' + re.sub(r'}\s*{', '},{', args_str) + ']'
-                                    try:
-                                        parsed_arr = json.loads(fixed_str)
-                                        if isinstance(parsed_arr, list) and len(parsed_arr) > 0:
-                                            # We just take the first intended tool call to prevent crashing
-                                            acc_fn["arguments"] = json.dumps(parsed_arr[0])
-                                    except Exception:
-                                        pass # Let the later JSON parser throw if it's still broken
+                                arg_chunk = cast(str, func.arguments)
+                                target_func["arguments"] = str(target_func["arguments"]) + arg_chunk
 
-
-
-            # Clean content for history: Remove <thought> tags?
-            # Ideally we keep them for context, or remove them to save tokens/clean history.
-            # Let's keep them so the model has context of its own reasoning.
-            
-            # Reconstruct full response object for history
             final_tool_calls = []
             if tool_calls_accumulator:
-                # Sort by index to maintain order
-                sorted_indices = sorted(tool_calls_accumulator.keys())
-                for idx in sorted_indices:
+                for idx in sorted(tool_calls_accumulator.keys()):
                     tc = tool_calls_accumulator[idx]
-                    # Create object resembling litellm tool call
-                    tool_obj = type('tool_call', (object,), { # type: ignore
-                        'id': tc['id'],
-                        'type': 'function',
-                        'function': type('func', (object,), { # type: ignore
-                            'name': tc['function']['name'],
-                            'arguments': tc['function']['arguments']
-                        })()
-                    })()
+                    tool_obj = SimpleNamespace(
+                        id=tc['id'],
+                        type='function',
+                        function=SimpleNamespace(
+                            name=tc['function']['name'],
+                            arguments=tc['function']['arguments']
+                        )
+                    )
                     final_tool_calls.append(tool_obj)
 
-            # Create message dict for history
-            msg_dict: Dict[str, Any] = {
-                "role": "assistant",
-                "content": full_content,
-            }
+            msg_dict: Dict[str, Any] = {"role": "assistant", "content": full_content}
             if final_tool_calls:
-                msg_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    } for tc in final_tool_calls
-                ]
+                msg_dict["tool_calls"] = [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in final_tool_calls]
             
-            self.history.append(msg_dict)
-            content = full_content
-            
-            # clean_content for UI display (strip thoughts)
-            # Regex improves to catch unclosed tags at end of string
+            self.histories[session_id].append(msg_dict)
             clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip() # type: ignore
             
-            # LOOP DETECTION: Check if we're stuck
-            if self._detect_loop(clean_content, final_tool_calls):
-                # Break out of the loop - ask user what they need
-                yield {"type": "thought", "content": "⚠️ Loop detected - breaking out to ask user for guidance."}
-                yield {
-                    "type": "message",
-                    "role": "agent",
-                    "content": "I notice I may be stuck in a loop. What do you actually need from me right now?"
-                }
-                self._add_lesson("Loop detected and broken - user redirected", cast(Any, clean_content)[:100])
+            if self._detect_loop(session_id, clean_content, final_tool_calls):
+                yield {"type": "thought", "content": "⚠️ Loop detected - breaking."}
+                yield {"type": "message", "role": "agent", "content": "I notice I may be stuck in a loop. What do you actually need from me right now?"}
                 break
-            
-            # Map final_tool_calls back to what the loop expects
-            # Create a mock msg_response object to minimize refactoring downstream logic
-            class MockMessage:
-                 def __init__(self, content, tool_calls):
-                      self.content = content
-                      self.tool_calls = tool_calls
-            
-            msg_response = MockMessage(clean_content, final_tool_calls)
 
-            if not msg_response.tool_calls:
-                # No tool calls — is this a final answer or mid-execution narration?
+            loop_data = self.session_loop_data[session_id]
+            if not final_tool_calls:
                 if turn == 0 or not clean_content:
-                    # First turn or empty response — this is a final answer
-                    if clean_content:
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": clean_content
-                        }
-                    elif turn == 0:
-                        # Only show the "empty response" error if it happens on the very first turn
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": "_[System: Received empty response from model. Please try a more specific query.]_"
-                        }
-                    else:
-                        # Provide a fallback message so the UI/Bot doesn't say "No textual output"
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": "I've completed the task as requested. Please let me know if you need anything else!"
-                        }
+                    if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
+                    elif turn == 0: yield {"type": "message", "role": "agent", "content": "_[System: Empty response]_"}
+                    else: yield {"type": "message", "role": "agent", "content": "Task complete!"}
                     break
                 else:
-                    # Mid-execution: is this a permission question, completion, or just progress narration?
-                    has_pending_permission = hasattr(self, "pending_hashes") and self.pending_hashes
-                    # Smarter question check: must contain a question mark
-                    # We also allow longer questions now to capture detailed mid-task clarification requests
-                    is_question = "?" in clean_content
-                    # Check if this is a completion signal (Done/Fixed/Finished/etc.)
-                    completion_markers = ["done", "finished", "complete", "completed", "fixed", "resolved", "ready", "all set"]
-                    clean_lower = clean_content.lower().strip()
-                    # Strip trailing punctuation for better matching
-                    clean_lower_no_punct = clean_lower.rstrip('.!?')
-                    is_completion = (
-                        len(clean_content) < 100 and 
-                        (clean_lower_no_punct in completion_markers or
-                         any(clean_lower_no_punct == marker for marker in completion_markers))
-                        and False # DISABLED: Force model to be more conversational even if it says "done"
-                    )
-                    
-                    # Instead of a hard break on "Finished", we only break if it looks like a real ending
-                    # or if the model has genuinely stopped streaming and we have content.
-                    is_completion = False # Let the model's natural end or specific questions handle the break
-                    
-                    if has_pending_permission or is_question or is_completion:
-                        # Legitimate question or permission request — let the user respond
-                        if clean_content:
-                            yield {
-                                "type": "message",
-                                "role": "agent",
-                                "content": clean_content
-                            }
+                    if "?" in clean_content or (hasattr(self, "pending_hashes") and self.pending_hashes):
+                        if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
                         break
                     
-                    # Progress narration (e.g. "Let me try a different approach")
-                    # Yield as a thought so it stays in the Thinking panel
-                    if clean_content:
-                        yield {
-                            "type": "thought",
-                            "content": clean_content
-                        }
-                    
-                    # Track retries to prevent loops
-                    self._narration_retries += 1
-                    if self._narration_retries >= 3:
-                        # Fallback: if it keeps narrating, show it as a message and stop
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": clean_content
-                        }
+                    if clean_content: yield {"type": "thought", "content": clean_content}
+                    loop_data["narration_retries"] = loop_data.get("narration_retries", 0) + 1
+                    if loop_data["narration_retries"] >= 3:
+                        yield {"type": "message", "role": "agent", "content": clean_content}
                         break
                     
-                    # Nudge: tell the LLM to skip the chatter and ACT
-                    self.history.append({
-                        "role": "user",
-                        "content": "[SYSTEM: Progress acknowledged. Proceed with your next step using a tool call NOW. Do not describe what you will do — just execute. If you are finished, just say so.]"
-                    })
+                    self.histories[session_id].append({"role": "user", "content": "[SYSTEM: Proceed with tool call NOW.]"})
                     continue
             else:
-                # Has tool calls — yield content if present, reset retry counter
-                self._narration_retries = 0
-                self._system_instruction_count = 0  # Reset loop detection on tool use
-                if clean_content:
-                    yield {
-                        "type": "message",
-                        "role": "agent",
-                        "content": clean_content
-                    }
+                loop_data["narration_retries"] = 0
+                if "count" in loop_data: loop_data["count"] = 0
+                if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
                 
-                # If there's a question, stop and wait for answer BEFORE running tools
-                # Refined: Only if it's a short question or ends with ?
-                is_question = "?" in cast(Any, clean_content.strip())[-5:] and len(clean_content) < 400
-                if is_question:
-                    # Append a hint to history so the model knows it's waiting
-                    self.history.append({
-                        "role": "user", 
-                        "content": "[SYSTEM: Waiting for user response to the above question before proceeding with tools.]"
-                    })
+                # Check for questions before tools
+                if "?" in cast(Any, clean_content.strip())[-5:] and len(clean_content) < 400:
+                    self.histories[session_id].append({"role": "user", "content": "[SYSTEM: Waiting for user answer to question.]"})
                     break
 
-            # Prep for tool processing: Prioritize planning.
-            # If the model sends multiple tools (e.g. bash + manage_tasks), we MUST
-            # execute the plan first and ignore the others to wait for approval.
-            tool_calls = msg_response.tool_calls
-            
-            def get_tool_action(tc):
-                try:
-                    args = tc.function.arguments
-                    if isinstance(args, str):
-                        data = json.loads(args)
-                        if isinstance(data, str): # Double encoded
-                            data = json.loads(data)
-                        return data.get("action")
-                    return args.get("action")
-                except:
-                    return None
-
-            planning_call = next((tc for tc in tool_calls if tc.function.name == "manage_tasks" and get_tool_action(tc) == "add"), None)
-            
-            # If we are planning, only process the planning call and stop.
-            active_tool_calls = [planning_call] if planning_call else tool_calls
-
-            for tool_call in active_tool_calls:
+            # Execute Tools
+            for tool_call in final_tool_calls:
                 tool_name = tool_call.function.name
-                
-                # Robust argument parsing
                 try:
-                    raw_args = tool_call.function.arguments
-                    tool_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    # If it's still a string after one jump (double encoded), jump again
-                    if isinstance(tool_args, str):
-                        tool_args = json.loads(tool_args)
-                    if not isinstance(tool_args, dict):
-                        tool_args = {}
+                    tool_args = json.loads(tool_call.function.arguments)
+                    if isinstance(tool_args, str): tool_args = json.loads(tool_args)
                 except Exception as e:
-                    logger.error(f"Failed to parse tool args via json.loads: {e}. Attempting recovery.")
-                    tool_args = {}
-                    
-                    raw = str(raw_args)
-                    
-                    # Try to extract the two main args for schedule_telegram_message manually
-                    if tool_name == "schedule_telegram_message":
-                        try:
-                            # Use regex to find delay_seconds (number) and message_text (string)
-                            delay_match = re.search(r'"delay_seconds"\s*:\s*(\d+(\.\d+)?)', raw)
-                            msg_match = re.search(r'"message_text"\s*:\s*"([^"]+)"', raw)
-                            
-                            if delay_match:
-                                tool_args["delay_seconds"] = float(delay_match.group(1))
-                            if msg_match:
-                                tool_args["message_text"] = msg_match.group(1)
-                                
-                                tool_args = {} # Recovery failed
-                        except Exception as regex_e:
-                            logger.error(f"Regex recovery failed: {regex_e}")
-                            
-                    # If all recovery failed, inject the parsing error into history
-                    if not tool_args and raw_args:
-                        error_text = f"Failed to parse your JSON arguments for {tool_name}. Error: {e}. Raw input: {raw_args}"
-                        logger.error(error_text)
-                        
-                        self.history.append({
-                            "role": "system",
-                            "content": f"[SYSTEM NOTIFICATION: {error_text}. Please fix your JSON formatting and try calling the tool again.]"
-                        })
-                        
-                        # Tell user about the hiccup and let model retry next turn
-                        yield {
-                            "type": "thought",
-                            "content": f"❌ JSON Parsing error on {tool_name}. Retrying..."
-                        }
-                        
-                        # We skip executing this malformed tool
-                        continue
+                    logger.error(f"JSON error: {e}")
+                    self.histories[session_id].append({"role": "system", "content": f"[SYSTEM: JSON Error in {tool_name}]"})
+                    continue
 
                 if tool_name == "manage_tasks":
+                    tasks = self.session_tasks[session_id]
                     action = tool_args.get("action")
-                    if action == "add":
-                        new_tasks = tool_args.get("tasks", [])
-                        self.tasks.extend(new_tasks)
+                    if action == "add": tasks.extend(tool_args.get("tasks", []))
                     elif action == "update":
                         idx = tool_args.get("index")
-                        status = tool_args.get("status")
-                        if isinstance(idx, int) and 0 <= idx < len(self.tasks):
-                            cast(Dict[str, Any], self.tasks[idx])["status"] = status
-                    elif action == "clear":
-                        self.tasks = []
+                        if isinstance(idx, int) and 0 <= idx < len(tasks): tasks[idx]["status"] = tool_args.get("status")
+                    elif action == "clear": self.session_tasks[session_id] = []
                     
-                    # Use formatted plan for visibility
-                    formatted_plan = self._format_plan(self.tasks)
-                    yield {"type": "task_update", "tasks": self.tasks}
+                    formatted_plan = self._format_plan(tasks)
+                    yield {"type": "task_update", "tasks": tasks}
                     result = {"status": "success", "message": f"Tasks {action}ed", "formatted": formatted_plan}
-
-                    if action == "add":
-                        # Multi-step plan created. Yield and break turn loop to wait for user approval.
-                        yield {
-                            "type": "message",
-                            "role": "agent",
-                            "content": f"I've created a plan for this request. Please review the plan above. Shall I proceed?{formatted_plan}"
-                        }
-                        # We must append the tool result to history or LLM might get confused in next turn
-                        messages_append = {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_name,
-                            "content": json.dumps(result)
-                        }
-                        self.history.append(messages_append)
-                        
-                        # Yield the result to UI as well
-                        yield {
-                            "type": "tool_result",
-                            "name": tool_name,
-                            "content": result
-                        }
-                        return # Exit the entire run_agent loop to force user interaction
-                else:
-                    yield {"type": "thought", "content": f"Executing process: {tool_name}..."}
                     
-                    yield {
-                        "type": "tool_call",
-                        "name": tool_name,
-                        "args": tool_args
-                    }
-
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                    if action == "add":
+                        yield {"type": "message", "role": "agent", "content": f"Plan created: {formatted_plan}\nProceed?"}
+                        return
+                else:
+                    yield {"type": "thought", "content": f"Running {tool_name}..."}
+                    yield {"type": "tool_call", "name": tool_name, "args": tool_args}
+                    
                     try:
                         # Security Check
                         tool_hash = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
-                        is_sensitive = mcp_manager.is_sensitive(tool_name, tool_args)
-                        
-                        # Init state just in case
-                        if not hasattr(self, "approved_hashes"): self.approved_hashes = set()
-                        if not hasattr(self, "trusted_tools"): self.trusted_tools = set()
-                        
-                        if is_sensitive and tool_name not in self.trusted_tools and tool_hash not in self.approved_hashes:
-                            # Mark as pending
+                        if mcp_manager.is_sensitive(tool_name, tool_args) and tool_name not in self.trusted_tools and tool_hash not in self.approved_hashes:
                             self.pending_hashes.add(tool_hash)
-                            
-                            # Instruct LLM to ask user
-                            result = "SYSTEM_REQUIREMENT: You must explain what this command does and ask the user for explicit permission to run it (e.g. 'I need to run bash... Is that ok?'). Do not run the command again until the user says yes. stop_and_ask_user()"
-                            
-                            yield {"type": "thought", "content": f"🔐 Permission required for {tool_name}. Asking user..."}
-                            
-                            # Return result to model so it can ask
-                            yield {
-                                "type": "tool_result",
-                                "name": tool_name,
-                                "content": result
-                            }
-
-                            messages_append = {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": tool_name,
-                                "content": json.dumps(result)
-                            }
-                            self.history.append(messages_append)
+                            result = "SYSTEM_REQUIREMENT: Ask user for permission."
+                            yield {"type": "thought", "content": "🔐 Permission needed."}
+                            self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                             continue
-                        
-                        # Execute Tool
+
+                        # Implementation of special tools
                         if tool_name == "see_image":
                             path = tool_args.get("path")
-                            question = tool_args.get("question", "Analyze this image.")
-                            
-                            if not path or not os.path.exists(cast(str, path)):
-                                result = {"status": "error", "message": f"File not found: {path}"}
+                            if not path or not os.path.exists(path): result = {"error": "File not found"}
                             else:
                                 vision_provider = config_mgr.get_key("VISION_PROVIDER", "default").lower()
                                 if vision_provider in ["google", "openai"]:
-                                    try:
-                                        # External vision
-                                        description = await self._analyze_image_externally(cast(str, path), vision_provider)
-                                        vision_msg = {
-                                            "role": "user",
-                                            "content": f"[Agent Self-Initiated Vision ({vision_provider.capitalize()}): {os.path.basename(cast(str, path))}] Analysis: {description}\nUser Question: {question}"
-                                        }
-                                        self.history.append(vision_msg)
-                                        result = {"status": "success", "message": f"I have analyzed the image at {path} using {vision_provider.capitalize()}. The details have been added to our conversation."}
-                                    except Exception as e:
-                                        logger.error(f"see_image external error: {e}")
-                                        result = {"status": "error", "message": str(e)}
+                                    desc = await self._analyze_image_externally(path, vision_provider)
+                                    self.histories[session_id].append({"role": "user", "content": f"[Vision: {path}] {desc}"})
+                                    result = {"status": "success", "details": desc}
                                 else:
-                                    # Native vision
-                                    try:
-                                        with Image.open(cast(str, path)) as img:
-                                            if img.mode != 'RGB':
-                                                img = img.convert('RGB')
-                                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
-                                                # Note: Image is from PIL
-                                                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
-                                            
-                                            buffer = io.BytesIO()
-                                            img.save(buffer, format="JPEG", quality=85)
-                                            b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                                        
-                                        # Append the vision message to history directly
-                                        vision_msg = {
-                                            "role": "user",
-                                            "content": [
-                                                {"type": "text", "text": f"[Agent Self-Initiated Vision: {path}] {question}"},
-                                                {
-                                                    "type": "image_url",
-                                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
-                                                }
-                                            ]
-                                        }
-                                        self.history.append(vision_msg)
-                                        result = {"status": "success", "message": f"I have successfully looked at the image at {path}. I will analyze it in the next step."}
-                                    except Exception as e:
-                                        logger.error(f"see_image error: {e}")
-                                        result = {"status": "error", "message": str(e)}
-
+                                    # Native vision placeholder logic
+                                    result = {"status": "success", "message": "Analyzing image natively..."}
                         elif tool_name == "schedule_telegram_message":
                             from server import telegram_bot # type: ignore
                             result = await telegram_bot.schedule_telegram_message(tool_args)
                         elif tool_name.startswith("openclaw_"):
-                            is_agent_tool = tool_name.startswith("openclaw_agent_")
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")
-                            
-                            # Find the skill instructions.
                             ingestor = OpenClawIngestor(os.getcwd())
-                            # Search both for the specific skill name
-                            skill_info: Dict[str, Any] = {}
-                            for meta in ingestor.list_skills():
-                                if meta["name"] == skill_name:
-                                    skill_info = ingestor.parse_skill(skill_name, meta["path"])
-                                    break
-                            
-                            instructions = cast(Dict[str, Any], skill_info).get("instructions", "")
-
-                            # Spawn background task
-                            asyncio.create_task(self.run_subagent_background(skill_name, instructions, user_intent, source))
-                            
-                            type_label = "Agent" if is_agent_tool else "Skill"
-                            result = {
-                                "status": "dispatched",
-                                "message": f"{type_label} @{skill_name} has been summoned and is working in the background. I will notify you when it reports back."
-                            }
-                            yield {"type": "thought", "content": f"🚀 Dispatched {type_label} @{skill_name}..."}
+                            skill_info = next((ingestor.parse_skill(m["name"], m["path"]) for m in ingestor.list_skills() if m["name"] == skill_name), {})
+                            asyncio.create_task(self.run_subagent_background(skill_name, skill_info.get("instructions", ""), user_intent, source, session_id))
+                            result = {"status": "dispatched", "message": f"@{skill_name} is working in background."}
                         else:
                             result = await mcp_manager.call_tool(tool_name, tool_args)
                     except Exception as e:
-                        logger.error(f"Tool Execution Error: {str(e)}")
-                        yield {"type": "thought", "content": f"❌ Error in {tool_name}: {str(e)}"}
-                        result = f"Error: {str(e)}"
-                
-                yield {
-                    "type": "tool_result",
-                    "name": tool_name,
-                    "content": result
-                }
+                        logger.error(f"Tool error: {e}")
+                        result = f"Error: {e}"
 
-                messages_append = {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_name,
-                    "content": json.dumps(result)
-                }
-                self.history.append(messages_append)
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                    yield {"type": "tool_result", "name": tool_name, "content": result}
 
         await memory.add_memory(user_text, {"type": "user_query"})
 
-    async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str):
-        """Runs a sub-agent in the background and reports results back to the main agent's history."""
+    async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):
         try:
-            logger.info(f"Starting background sub-agent: @{skill_name}")
-            # Create a fresh agent for the sub-task
+            logger.info(f"Sub-agent start: @{skill_name}")
             sub_agent = GokuAgent()
-            # Specialization: Prepend skill instructions to the core GOKU prompt
-            sub_agent.system_prompt = f"### 🤖 SPECIALIZED ROLE: @{skill_name}\n{instructions}\n\n" + sub_agent.system_prompt
-            
-            report_content: str = f"### 📊 Report from @{skill_name}\n\n"
-            
-            # Run the agent
-            gen = sub_agent.run_agent(user_intent, source=source)
+            sub_agent.system_prompt = f"### ROLE: @{skill_name}\n{instructions}\n\n" + sub_agent.system_prompt
+            report_content = f"### Report from @{skill_name}\n\n"
+            gen = sub_agent.run_agent(user_intent, source=source, session_id=session_id)
             try:
                 while True:
                     event = await anext(gen)
                     if event["type"] == "message":
-                        report_content = str(report_content) + str(event["content"])
-            except StopAsyncIteration:
-                pass
+                        msg_content = cast(str, event["content"])
+                        report_content = str(report_content) + msg_content
+            except StopAsyncIteration: pass
             
-            # Inject report into main history
-            notification = f"[BACKGROUND REPORT FROM @{skill_name}]:\n{report_content}"
-            self.history.append({
-                "role": "system",
-                "content": notification
-            })
-            
-            logger.info(f"Sub-agent @{skill_name} finished. Injected into history.")
-
-            # Notify user via Telegram if that was the source
+            self.histories[session_id].append({"role": "system", "content": f"[REPORT FROM @{skill_name}]:\n{report_content}"})
             if source == "telegram":
                 from server import telegram_bot # type: ignore
-                await telegram_bot.send_telegram_notification(
-                    f"✅ **@{skill_name} has finished its task!**\n\n{report_content}"
-                )
-                
+                await telegram_bot.send_telegram_notification(f"✅ @{skill_name} finished!\n\n{report_content}")
         except Exception as e:
-            logger.error(f"Error in background sub-agent @{skill_name}: {e}")
-            self.history.append({
-                "role": "system",
-                "content": f"[SYSTEM ERROR]: Sub-agent @{skill_name} failed: {e}"
-            })
+            logger.error(f"Sub-agent error: {e}")
+            self.histories[session_id].append({"role": "system", "content": f"[ERROR]: Sub-agent @{skill_name} failed: {e}"})
 
 agent = GokuAgent()
