@@ -20,3 +20,4 @@ httpx
 questionary
 python-telegram-bot
 python-telegram-bot
+markitdown

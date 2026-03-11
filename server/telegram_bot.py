@@ -3,12 +3,15 @@ import asyncio
 import os
 from typing import cast, Any
 import re
+import json
 from datetime import datetime, timedelta
 from telegram import Update, constants # type: ignore
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters # type: ignore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler # type: ignore
 from server.agent import agent # type: ignore
-from server.telegram_formatter import format_for_telegram, smart_chunk, strip_markdown # type: ignore
+from server.config_manager import config_manager
+from server.telegram_formatter import format_for_telegram, strip_markdown, smart_chunk # type: ignore
+from server.speech_service import transcribe_audio, generate_speech # type: ignore
 
 # Configure uploads directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -146,6 +149,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _latest_chat_id = update.effective_chat.id
     
     query = update.message.text or update.message.caption or ""
+    is_voice_session = False
     
     # Check for @mention summoning
     is_summon = False
@@ -207,6 +211,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             attachment_info = f"[File Received: {file_path}]"
             logger.info(f"Downloaded video to {file_path}")
             
+        elif update.message.voice:
+            voice = update.message.voice
+            file = await context.bot.get_file(voice.file_id)
+            filename = f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg"
+            file_path = os.path.join(UPLOAD_DIR, filename)
+            await file.download_to_drive(file_path)
+            
+            logger.info(f"Downloaded voice note to {file_path}")
+            status_msg = await update.message.reply_text("🎙️ Processing voice note...")
+            
+            # Transcribe the audio
+            transcript = await transcribe_audio(file_path)
+            if transcript:
+                query = transcript
+                is_voice_session = True
+                attachment_info = "" # Voice notes don't need file analysis, they are just speech
+                await status_msg.edit_text(f"🗣️ You said: \"{transcript}\"")
+            else:
+                await status_msg.edit_text("⚠️ Could not transcribe voice note. Make sure STT keys are configured.")
+                return
+
     except Exception as e:
         logger.error(f"Failed to download attachment: {e}")
         await update.message.reply_text(f"⚠️ Failed to download attachment: {e}")
@@ -224,10 +249,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         full_query = f"{attachment_info} {query}".strip()
         
+        
     if not full_query: return
     
-    # Send initial status
-    if attachment_info:
+    # Send initial status (only if we didn't already send one for voice)
+    if is_voice_session:
+        # We already have a status_msg from processing the voice note, just append
+        status_msg = await update.message.reply_text("🤔 Thinking...")
+    elif attachment_info:
         status_msg = await update.message.reply_text(f"⏳ {file_type_str.capitalize()} received. Analyzing your {file_type_str}, this may take a moment...")
     else:
         status_msg = await update.message.reply_text("🤔 Thinking...")
@@ -320,6 +349,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         await cast(Any, status_msg).edit_text(cast(Any, raw_text)[:4096])
             
+            # Handle Voice Generation if this is a voice session
+            if is_voice_session and raw_text:
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.RECORD_VOICE)
+                tts_output_path = os.path.join(UPLOAD_DIR, f"reply_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
+                success = await generate_speech(raw_text, tts_output_path)
+                if success:
+                    with open(tts_output_path, "rb") as voice_file:
+                        await context.bot.send_voice(
+                            chat_id=update.effective_chat.id,
+                            voice=voice_file
+                        )
+
     except Exception as e:
         logger.error(f"Error processing telegram message: {e}")
         err_msg = str(e).lower()
@@ -355,9 +396,9 @@ async def start_telegram_bot(token: str):
         
         _application.add_handler(CommandHandler("start", start))
         _application.add_handler(CommandHandler("ping", ping))
-        # Handle text, documents, and photos
+        # Handle text, documents, photos, videos, and voice notes
         _application.add_handler(MessageHandler(
-            (filters.TEXT | filters.Document.ALL | filters.PHOTO) & (~filters.COMMAND), 
+            (filters.TEXT | filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.VOICE) & (~filters.COMMAND), 
             handle_message
         ))
         

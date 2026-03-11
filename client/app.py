@@ -453,6 +453,8 @@ async def configure_integrations():
             ("🔧 Jira", "JIRA_API_TOKEN", "Issue tracking & sprint management"),
             ("💬 Discord", "DISCORD_BOT_TOKEN", "Bot messaging & server management"),
             ("📱 Telegram", "TELEGRAM_BOT_TOKEN", "Bot notifications & messaging"),
+            ("🎙️ ElevenLabs", "ELEVENLABS_API_KEY", "Highly realistic Text-to-Speech & Speech-to-Text"),
+            ("⚡ Groq", "GROQ_API_KEY", "Ultra-fast Speech-to-Text inference (optional)"),
         ]
         
         choices = []
@@ -554,6 +556,23 @@ async def configure_integrations():
                 if chat_id:
                     config_manager.set_key("TELEGRAM_CHAT_ID", chat_id)
                 rprint("[bold green]✅ Telegram connected![/bold green]")
+        
+        elif "ElevenLabs" in selection:
+            rprint("[bold cyan]🎙️ ElevenLabs Integration[/bold cyan]")
+            rprint("[dim]Get API key at: https://elevenlabs.io/app/api-keys[/dim]")
+            key = await questionary.password("Enter ElevenLabs API Key:").ask_async()
+            if key:
+                config_manager.set_key("ELEVENLABS_API_KEY", key)
+                rprint("[bold green]✅ ElevenLabs connected for Voice Support![/bold green]")
+                
+        elif "Groq" in selection:
+            rprint("[bold cyan]⚡ Groq Integration[/bold cyan]")
+            rprint("[dim]Get API key at: https://console.groq.com/keys[/dim]")
+            rprint("[dim]Note: Excellent for ultra-fast Whisper speech-to-text[/dim]")
+            key = await questionary.password("Enter Groq API Key (gsk_...):").ask_async()
+            if key:
+                config_manager.set_key("GROQ_API_KEY", key)
+                rprint("[bold green]✅ Groq connected![/bold green]")
 
 
 async def configure_mcp_servers():

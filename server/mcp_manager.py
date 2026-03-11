@@ -1,10 +1,10 @@
 import os
-import httpx
+import httpx # type: ignore
 import json
 import logging
 import subprocess
 from typing import List, Dict, Any
-from server.openclaw_ingestor import OpenClawIngestor
+from server.openclaw_ingestor import OpenClawIngestor # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +13,12 @@ class MCPManager:
         self.servers = {
             "git": os.getenv("MCP_GIT_URL", "http://localhost:8080"),
             "search": os.getenv("MCP_SEARCH_URL", "http://localhost:8081"),
+            "document": os.getenv("MCP_DOCUMENT_URL", "http://localhost:8082"),
+            "voice": os.getenv("MCP_VOICE_URL", "http://localhost:8083"),
         }
         self.openclaw_root = "/home/elvisthebuilder/Documents/Dev/goku/openclaw"
         self.openclaw_ingestor = OpenClawIngestor(self.openclaw_root)
+        self.cwd = os.getcwd() # Pre-initialize to fix IDE errors
 
     async def get_all_tools(self) -> List[Dict[str, Any]]:
         all_tools = []
@@ -109,9 +112,6 @@ class MCPManager:
         return False
 
     async def call_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
-        if not hasattr(self, "cwd"):
-            self.cwd = os.getcwd()
-            
         # 1. Determine the source based on the tool name prefix
         if tool_name == "bash":
             server_name = "native"
@@ -144,7 +144,7 @@ class MCPManager:
                     if os.path.isdir(new_cwd):
                         self.cwd = new_cwd
                     # The actual output is everything except the last line (the pwd)
-                    actual_stdout = "\n".join(output[:-1])
+                    actual_stdout = "\n".join(output[:-1]) # type: ignore
                 else:
                     actual_stdout = result.stdout
 
