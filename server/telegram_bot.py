@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 from telegram import Update, constants # type: ignore
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters # type: ignore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler # type: ignore
-from server.agent import agent # type: ignore
-from server.config_manager import config_manager
-from server.telegram_formatter import format_for_telegram, strip_markdown, smart_chunk # type: ignore
-from server.speech_service import transcribe_audio, generate_speech # type: ignore
+from .agent import agent # type: ignore
+from .config_manager import config_manager # type: ignore
+from .telegram_formatter import format_for_telegram, strip_markdown, smart_chunk # type: ignore
+from .speech_service import transcribe_audio, generate_speech # type: ignore
 
 # Configure uploads directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +31,8 @@ _application = None
 # Message deduplication cache: {hash: expiry_timestamp}
 _message_dedupe_cache: Dict[str, datetime] = {}
 DEDUPE_WINDOW_SECONDS = 5
+
+from server.channel_manager import channel_broker # type: ignore
 
 def _describe_tool_action(tool_name: str, tool_args: dict) -> str:
     """Generate a human-readable status message from a tool call."""
@@ -143,8 +145,8 @@ async def send_telegram_notification(text: str, chat_id: int | None = None):
     if _latest_context and target_chat_id:
         try:
             # Check if text needs formatting
-            from server.telegram_formatter import format_markdown_v2 # type: ignore
-            formatted_text = format_markdown_v2(text)
+            from server.telegram_formatter import format_for_telegram # type: ignore
+            formatted_text = format_for_telegram(text)
             await _latest_context.bot.send_message(
                 chat_id=target_chat_id,
                 text=formatted_text,
@@ -152,13 +154,13 @@ async def send_telegram_notification(text: str, chat_id: int | None = None):
             )
             logger.info(f"Notification sent to {target_chat_id}")
         except Exception as e:
-            logger.error(f"Failed to send notification: {e}")
+            logger.error(f"Failed to send formatted notification: {e}")
             # Fallback to plain text if formatting fails
             try:
                 await _latest_context.bot.send_message(chat_id=target_chat_id, text=text)
+                logger.info(f"Fallback plain text notification sent to {target_chat_id}")
             except:
                 pass
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global _latest_context, _latest_chat_id, _message_dedupe_cache
     _latest_context = context
@@ -166,8 +168,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. Deduplication Check
     try:
-        # Create unique hash for this message/file
         msg = update.message
+        if not msg: return
+        
         content_parts = []
         if msg.text: content_parts.append(msg.text)
         if msg.caption: content_parts.append(msg.caption)
@@ -180,263 +183,166 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if msg_hash:
             now = datetime.now()
-            # Clean old entries
             _message_dedupe_cache = {h: t for h, t in _message_dedupe_cache.items() if t > now}
-            
             if msg_hash in _message_dedupe_cache:
                 logger.info(f"Ignored duplicate message from {update.effective_chat.id}")
                 return
-            
             _message_dedupe_cache[msg_hash] = now + timedelta(seconds=DEDUPE_WINDOW_SECONDS)
     except Exception as e:
         logger.error(f"Deduplication error: {e}")
 
     query = update.message.text or update.message.caption or ""
-    is_voice_session = False
+    is_voice = False
+    attachment_path = None
     
-    # Check for @mention summoning
-    is_summon = False
-    if query.strip().startswith("@"):
-        match = re.match(r"@(\w+)\s+(.*)", query.strip())
-        if match:
-            skill_name = match.group(1).lower()
-            intent = match.group(2)
-            # Route to skill via a system instruction that forces the tool call
-            # We wrap it in a special instruction that the agent will see first
-            query = f"[USER SUMMONED @{skill_name}]: {intent}"
-            is_summon = True
-            logger.info(f"User summoned @{skill_name} with intent: {intent}")
-    
-    # Handle Attachments
-    attachment_info = ""
-    file_type_str = "file"
+    # 2. Handle Attachments
     try:
         if update.message.document:
             doc = update.message.document
             file = await context.bot.get_file(doc.file_id)
-            file_path = os.path.join(UPLOAD_DIR, doc.file_name)
-            
-            ext = os.path.splitext(file_path)[1].lower()
-            if ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
-                file_type_str = "video"
-            elif ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv', '.md']:
-                file_type_str = "document"
-            elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-                file_type_str = "image"
-            elif ext in ['.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.json', '.sh', '.cpp', '.c']:
-                file_type_str = "code file"
-                
-            await file.download_to_drive(file_path)
-            attachment_info = f"[File Received: {file_path}]"
-            logger.info(f"Downloaded document to {file_path}")
+            attachment_path = os.path.join(UPLOAD_DIR, doc.file_name or f"doc_{doc.file_id}")
+            await file.download_to_drive(attachment_path)
             
         elif update.message.photo:
-            # Take the largest photo size
             photo = update.message.photo[-1]
             file = await context.bot.get_file(photo.file_id)
-            # Use timestamp for photo names
-            ext = ".jpg" # Default for telegram photos
-            file_type_str = "image"
-            filename = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-            file_path = os.path.join(UPLOAD_DIR, filename)
-            await file.download_to_drive(file_path)
-            attachment_info = f"[Photo Received: {file_path}]"
-            logger.info(f"Downloaded photo to {file_path}")
+            attachment_path = os.path.join(UPLOAD_DIR, f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
+            await file.download_to_drive(attachment_path)
             
         elif update.message.video:
             video = update.message.video
             file = await context.bot.get_file(video.file_id)
-            ext = os.path.splitext(video.file_name or ".mp4")[1].lower()
-            file_type_str = "video"
-            filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-            file_path = os.path.join(UPLOAD_DIR, filename)
-            await file.download_to_drive(file_path)
-            attachment_info = f"[File Received: {file_path}]"
-            logger.info(f"Downloaded video to {file_path}")
+            attachment_path = os.path.join(UPLOAD_DIR, f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+            await file.download_to_drive(attachment_path)
             
         elif update.message.voice:
             voice = update.message.voice
             file = await context.bot.get_file(voice.file_id)
-            filename = f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg"
-            file_path = os.path.join(UPLOAD_DIR, filename)
+            file_path = os.path.join(UPLOAD_DIR, f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
             await file.download_to_drive(file_path)
             
-            logger.info(f"Downloaded voice note to {file_path}")
-            status_msg = await update.message.reply_text("🎙️ Processing voice note...")
-            
-            # Transcribe the audio
             transcript = await transcribe_audio(file_path)
             if transcript:
                 query = transcript
-                is_voice_session = True
-                attachment_info = "" # Voice notes don't need file analysis, they are just speech
-                await status_msg.edit_text(f"🗣️ You said: \"{transcript}\"")
+                is_voice = True
             else:
-                await status_msg.edit_text("⚠️ Could not transcribe voice note. Make sure STT keys are configured.")
+                await update.message.reply_text("⚠️ Could not transcribe voice note.")
                 return
 
     except Exception as e:
         logger.error(f"Failed to download attachment: {e}")
         await update.message.reply_text(f"⚠️ Failed to download attachment: {e}")
 
-    if attachment_info and not query:
-        # User uploaded a file with no message — add an implicit prompt to force conversational analysis
-        implicit_prompt = f"(System Action: The user just uploaded this {file_type_str} without any instructions. Please analyze its contents in detail and respond conversationally. Do not just say 'Done' or 'Waiting for instructions'. Instead, describe what you see and ask the user what they would like to do with it.)"
-        full_query = f"{attachment_info} {implicit_prompt}"
-    elif is_summon:
-        # For summons, we want the agent to call the specific tool immediately
-        mention_match = re.search(r"@(\w+)", (update.message.text or update.message.caption or "").strip())
-        skill_name = mention_match.group(1).lower() if mention_match else "unknown"
-        # The agent will look for openclaw_agent_<skill_name> or openclaw_skill_<skill_name>
-        full_query = f"{attachment_info} [SYSTEM: The user explicitly mentioned @{skill_name}. Find the most appropriate 'openclaw_' tool (agent or skill) and CALL it IMMEDIATELY with this intent: {query.replace(f'[USER SUMMONED @{skill_name}]: ', '')}]"
-    else:
-        full_query = f"{attachment_info} {query}".strip()
-        
-        
-    if not full_query: return
-    
-    # Send initial status (only if we didn't already send one for voice)
-    if is_voice_session:
-        # We already have a status_msg from processing the voice note, just append
-        status_msg = await update.message.reply_text("🤔 Thinking...")
-    elif attachment_info:
-        status_msg = await update.message.reply_text(f"⏳ {file_type_str.capitalize()} received. Analyzing your {file_type_str}, this may take a moment...")
-    else:
-        status_msg = await update.message.reply_text("🤔 Thinking...")
-    
-    response_text = ""
-    try:
-        # Use the global agent instance with session isolation
-        session_id = str(update.effective_chat.id)
-        gen = agent.run_agent(full_query, source="telegram", session_id=session_id)
+    # 3. Define Callbacks for Broker
+    chat_id = update.effective_chat.id
+    status_msg = None
+
+    async def status_update(text: str):
+        nonlocal status_msg
         try:
-            while True:
-                event = await anext(gen)
-                if event["type"] == "tool_call":
-                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
-                    try:
-                        status = _describe_tool_action(event.get('name', ''), event.get('args', {}))
-                        await cast(Any, status_msg).edit_text(status)
-                    except Exception:
-                        pass 
-                elif event["type"] == "message":
-                    # Accumulate multi-step responses
-                    chunk = event["content"]
-                    if chunk:
-                        if response_text:
-                            response_text += "\n\n"
-                        response_text += chunk
-        except StopAsyncIteration:
-            pass
-            
-        # After the loop finishes (either naturally or via StopAsyncIteration), check if the agent triggered the send_file tool
-        session_id = str(update.effective_chat.id)
-        history = agent.histories.get(session_id, [])
-        for msg in cast(list, history[-1:]): # Only check the most recent turn
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    if tc.get("function", {}).get("name") == "send_telegram_file":
-                        try:
-                            import json
-                            args_str = tc["function"].get("arguments", "{}")
-                            args = json.loads(args_str) if isinstance(args_str, str) else args_str
-                            if isinstance(args, str): args = json.loads(args)
-                            file_path = args.get("file_path")
-                            caption = args.get("caption", "")
-                            
-                            if file_path and os.path.exists(file_path):
-                                await cast(Any, status_msg).edit_text(f"📤 Uploading file: {os.path.basename(file_path)}...")
-                                # Use send_document for general files
-                                await context.bot.send_document(
-                                    chat_id=update.effective_chat.id,
-                                    document=open(file_path, 'rb'),
-                                    caption=caption
-                                )
-                                # Clear status message if successful
-                                response_text = "✅ File sent successfully."
-                            else:
-                                response_text += f"\n\n❌ Error: Could not find file at '{file_path}'"
-                        except Exception as e:
-                            logger.error(f"Failed to send file: {e}")
-                            response_text += f"\n\n❌ Failed to upload file: {e}"
-            # Handle Text Transmission
-            if not is_voice_session:
-                raw_text = str(response_text)
-                formatted_text = format_for_telegram(raw_text)
-                chunks = smart_chunk(formatted_text)
-                
-                if len(chunks) > 1:
-                    # Multiple chunks — send as separate messages
-                    try:
-                        await cast(Any, status_msg).delete()
-                    except Exception:
-                        pass
-                    for chunk in chunks:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=update.effective_chat.id,
-                                text=chunk,
-                                parse_mode="MarkdownV2"
-                            )
-                        except Exception as e:
-                            logger.warning(f"MarkdownV2 chunk failed, sending plain: {e}")
-                            plain_chunk = strip_markdown(chunk)
-                            await context.bot.send_message(
-                                chat_id=update.effective_chat.id,
-                                text=plain_chunk
-                            )
-                else:
-                    # Single message — edit the status message
-                    try:
-                        await cast(Any, status_msg).edit_text(formatted_text, parse_mode="MarkdownV2")
-                    except Exception as e:
-                        logger.warning(f"MarkdownV2 edit failed, falling back to plain text: {e}")
-                        try:
-                            plain = strip_markdown(raw_text)
-                            await cast(Any, status_msg).edit_text(plain)
-                        except Exception:
-                            await cast(Any, status_msg).edit_text(cast(Any, raw_text)[:4096])
+            if not status_msg:
+                status_msg = await update.message.reply_text(text)
             else:
-                # In voice sessions, we still need to clear the "Thinking" status
-                try:
-                    await cast(Any, status_msg).delete()
-                except Exception:
-                    pass
-
-            # Handle Voice Generation if this is a voice session
-            if is_voice_session and response_text:
-                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.RECORD_VOICE)
-                tts_output_path = os.path.join(UPLOAD_DIR, f"reply_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
-                success = await generate_speech(str(response_text), tts_output_path)
-                if success:
-                    with open(tts_output_path, "rb") as voice_file:
-                        await context.bot.send_voice(
-                            chat_id=update.effective_chat.id,
-                            voice=voice_file
-                        )
-
-    except Exception as e:
-        logger.error(f"Error processing telegram message: {e}")
-        err_msg = str(e).lower()
-        
-        # Classify the error for a user-friendly message
-        if "not reachable" in err_msg or "connect" in err_msg or "offline" in err_msg:
-            user_error = "⚠️ The AI service is currently offline. Please try again in a moment."
-        elif "timeout" in err_msg or "timed out" in err_msg:
-            user_error = "⏳ The AI took too long to respond (it may be loading). Please try again."
-        elif "not found" in err_msg and ("model" in err_msg or "ollama" in err_msg):
-            user_error = "⚠️ The AI model isn't available right now. Please check the server configuration."
-        elif "500" in err_msg or "server error" in err_msg or "service error" in err_msg:
-            user_error = "⚠️ The AI service encountered an internal error. It may recover on its own — try again in a moment."
-        elif "auth" in err_msg or "api key" in err_msg:
-            user_error = "🔑 Authentication error with the AI provider. Please check your API keys."
-        else:
-            user_error = f"❌ Something went wrong: {cast(Any, str(e))[:200]}"
-        
-        try:
-            await cast(Any, status_msg).edit_text(user_error)
+                await status_msg.edit_text(text)
         except Exception:
-            pass
+            # Fallback for deleted status messages
+            status_msg = await update.message.reply_text(text)
+
+    async def send_response(text: str):
+        nonlocal status_msg
+        try:
+            # Special check for internal tool call file uploads
+            # (Note: Channel Broker handles the agent execution loop)
+            # The agent.run_agent stream doesn't expose tool calls directly yet in the final text
+            # but we can check the history if we need to verify file delivery.
+            # For now, we trust the agent's tool execution in the generator loop.
+
+            # Formatting for Telegram
+            formatted = format_for_telegram(text)
+            chunks = smart_chunk(formatted)
+            
+            if is_voice:
+                if status_msg: await status_msg.delete()
+                audio_path = os.path.join(UPLOAD_DIR, f"reply_{chat_id}.mp3")
+                if await generate_speech(text, audio_path):
+                    with open(audio_path, 'rb') as vf:
+                        await context.bot.send_voice(chat_id=chat_id, voice=vf)
+                    try: os.remove(audio_path)
+                    except: pass
+                else:
+                    await context.bot.send_message(chat_id=chat_id, text=formatted, parse_mode="MarkdownV2")
+            else:
+                if len(chunks) > 1:
+                    if status_msg: 
+                        try: await status_msg.delete()
+                        except: pass
+                    for c in chunks:
+                        await context.bot.send_message(chat_id=chat_id, text=c, parse_mode="MarkdownV2")
+                else:
+                    if status_msg:
+                        try:
+                            await status_msg.edit_text(formatted, parse_mode="MarkdownV2")
+                        except Exception:
+                            await context.bot.send_message(chat_id=chat_id, text=formatted, parse_mode="MarkdownV2")
+                    else:
+                        await context.bot.send_message(chat_id=chat_id, text=formatted, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.warning(f"Response send failed: {e}")
+            await context.bot.send_message(chat_id=chat_id, text=strip_markdown(text))
+
+    # 4. Delegate to Broker
+    await channel_broker.handle_incoming_message(
+        session_id=str(chat_id),
+        content=query,
+        source="telegram",
+        send_message_fn=send_response,
+        status_update_fn=status_update,
+        is_voice=is_voice,
+        attachment_path=attachment_path
+    )
+
+async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays current bot configuration and integration status."""
+    logger.info(f"Config command received from {update.effective_chat.id}")
+    
+    config = config_manager.get_config()
+    
+    # AI Providers
+    providers = []
+    if config.get("OPENAI_API_KEY"): providers.append("• ✅ OpenAI")
+    else: providers.append("• ❌ OpenAI")
+    
+    if config.get("ANTHROPIC_API_KEY"): providers.append("• ✅ Anthropic")
+    else: providers.append("• ❌ Anthropic")
+    
+    if config.get("GOOGLE_API_KEY") or config.get("GEMINI_API_KEY"): providers.append("• ✅ Google/Gemini")
+    else: providers.append("• ❌ Google/Gemini")
+    
+    if config.get("GITHUB_TOKEN"): providers.append("• ✅ GitHub Models")
+    else: providers.append("• ❌ GitHub Models")
+
+    # Integrations
+    integrations = []
+    integrations.append("• ✅ Telegram (Active)")
+    
+    from server.whatsapp_bot import whatsapp_bot # type: ignore
+    if whatsapp_bot.is_connected:
+        integrations.append("• ✅ WhatsApp (Linked)")
+    else:
+        integrations.append("• ❌ WhatsApp (Not Linked - run `goku config` to link)")
+
+    # Model
+    current_model = config.get("GOKU_MODEL", "default")
+
+    report = (
+        "**⚙️ Goku Configuration**\n\n"
+        "**🤖 AI Providers:**\n" + "\n".join(providers) + "\n\n"
+        "**🔌 Active Integrations:**\n" + "\n".join(integrations) + "\n\n"
+        f"**🧠 Preferred Model:** `{current_model}`\n\n"
+        "💡 _To update your configuration, use the web dashboard or edit the .env file directly._"
+    )
+    
+    await update.message.reply_text(format_for_telegram(report), parse_mode="MarkdownV2")
 
 async def start_telegram_bot(token: str):
     """Starts the Telegram bot application in the background."""
@@ -451,6 +357,7 @@ async def start_telegram_bot(token: str):
         _application.add_handler(CommandHandler("start", start))
         _application.add_handler(CommandHandler("ping", ping))
         _application.add_handler(CommandHandler("voice", voice_command))
+        _application.add_handler(CommandHandler("config", config_command))
         # Handle text, documents, photos, videos, and voice notes
         _application.add_handler(MessageHandler(
             (filters.TEXT | filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.VOICE) & (~filters.COMMAND), 

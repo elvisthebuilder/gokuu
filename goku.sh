@@ -43,6 +43,11 @@ case "$1" in
         # Keep script running to manage process
         wait $BACKEND_PID
         ;;
+    logs)
+        shift
+        # Call the logs command in app.py
+        $VENV_PYTHON "$SCRIPT_DIR/client/app.py" logs "$@"
+        ;;
     update)
         shift
         echo "⬇️  Checking for updates..."
@@ -71,11 +76,13 @@ case "$1" in
         fi
         ;;
     *)
-        echo "Usage: goku [cli|web]"
+        echo "Usage: goku [cli|web|logs|update]"
         echo ""
         echo "Commands:"
-        echo "  cli   Start the interactive terminal agent"
-        echo "  web   Launch the high-fidelity web dashboard"
+        echo "  cli      Start the interactive terminal agent"
+        echo "  web      Launch the high-fidelity web dashboard"
+        echo "  logs     View diagnostic logs"
+        echo "  update   Pull latest version and re-install"
         exit 1
         ;;
 esac

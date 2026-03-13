@@ -1,26 +1,29 @@
-# Goku CLI Agent 🐉
+# Goku CLI Agent v2.5 🐉
 
-Goku is a superior AI terminal agent designed for high-performance development workflows. It leverages MCP tools, vector memory, and hybrid model routing to solve complex tasks directly from your terminal.
+Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
 
-## 🚀 Features
-- **Pure CLI Experience**: Fast, minimalist, and powerful. No bloated UI or Docker required.
-- **MCP Integration**: Seamlessly use Git, Search, and local Bash tools.
-- **Vector Memory**: Learns from your workflows using Qdrant.
-- **Hybrid Intelligence**: Routes to optimal models (OpenAI, Anthropic, or Local Ollama).
+## 🚀 What's New in v2.5
+- **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) that manages complex, multi-step engineering tasks autonomously.
+- **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown formatting for WhatsApp and Telegram.
+- **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`).
+- **Resilient Tool Logic**: Advanced JSON salvage mechanism to recover from malformed or concatenated LLM tool calls.
 
 ## 🏗️ Architecture
 
 ```mermaid
 graph TD
-    CLI[Goku CLI Client] --> Agent[Agent Logic]
-    Agent --> LiteLLM[LiteLLM Router]
-    Agent --> MCP[MCP Manager]
+    CLI[Goku CLI] --> Agent[Main Orchestrator]
+    Agent --> DEF[Departmental Pipelines]
     Agent --> Memory[Vector Memory]
+    Agent --> Channel[WhatsApp/Telegram]
     
-    LiteLLM --> Cloud[Cloud Models]
-    LiteLLM --> Local[Local Ollama]
+    DEF --> Health[Health Check]
+    DEF --> Implement[Implementation]
+    DEF --> Audit[Code Audit]
+    
+    Agent --> MCP[MCP Servers]
     MCP --> Bash[Native Bash]
-    MCP --> External[MCP Servers]
+    MCP --> Files[File System]
 ```
 
 ## 🛠️ Setup & Installation
@@ -35,29 +38,19 @@ curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.s
 > [!NOTE]
 > Make sure `~/.local/bin` is in your `PATH`. If not, add `export PATH="$PATH:$HOME/.local/bin"` to your `.bashrc` or `.zshrc`.
 
-### 💻 Compatibility
-- **Linux**: Fully supported (Ubuntu, Debian, Termux, etc.)
-- **macOS**: Fully supported (Intel & Apple Silicon)
-- **Windows**: Supported via **WSL** (Windows Subsystem for Linux)
-
 ## ⌨️ How to Use
 
-### Terminal Interface (CLI)
-Interact with Goku directly in your terminal with adaptive thoughts and tool execution.
-```bash
-goku cli
-```
-
-### Web Dashboard
-Launch the high-fidelity web interface with real-time intelligence logs and a 70/30 split view.
-```bash
-goku web
-```
-
-## 🤝 Contributing
-We welcome contributions! Please follow the standard fork and pull request workflow.
+### Global Commands
+- `goku cli`   - Start the interactive terminal agent
+- `goku web`   - Launch the high-fidelity web dashboard
+- `goku logs`  - View diagnostic logs (WhatsApp/Telegram activity)
+- `goku update` - Pull the latest version and re-install
 
 ## 🛡️ Security & Safety
 Goku is designed with a **Safety First** approach:
-- **Thought Transparency**: See exactly why the agent is taking an action.
+- **Thought Transparency**: See exactly why the agent is taking an action in real-time.
 - **Local Control**: Runs natively in your environment without external containers.
+- **Human-in-the-Loop**: Interactive confirmation for sensitive tool executions.
+
+## 🤝 Contributing
+We welcome contributions! Please follow the standard fork and pull request workflow.

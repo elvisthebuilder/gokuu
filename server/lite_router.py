@@ -170,7 +170,9 @@ class LiteRouter:
                             # Ollama prefers JSON objects for tool arguments
                             func["arguments"] = json.loads(args)
                         except Exception:
-                            pass
+                            # Fallback to an empty object if the LLM generated malformed JSON
+                            logger.debug(f"Failed to parse tool argument JSON: {args}")
+                            func["arguments"] = {}
                             
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")
@@ -577,7 +579,9 @@ class LiteRouter:
                     if tool_calls_raw:
                         for i, tc in enumerate(tool_calls_raw):
                             func = tc.get("function", {})
-                            args_raw = func.get('arguments', {})
+                            args_raw = func.get('arguments', "")
+                            
+                            # If it's a dict, dump it. If it's a string (streaming), pass it as-is.
                             if isinstance(args_raw, dict):
                                 args_str = json.dumps(args_raw)
                             elif isinstance(args_raw, str):

@@ -12,12 +12,32 @@ from rich import print as rprint # type: ignore
 import sys
 import os
 import logging
+import re
 
-# Silence LiteLLM's noisy tracebacks — Goku handles errors gracefully
+# Setup file logging for v2.5
+LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "goku.log")
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Configure root logger: File is DEBUG, Console is ERROR (for a clean UI)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.addHandler(file_handler)
+
+# Console handler for critical errors only
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.ERROR)
+root_logger.addHandler(console_handler)
+
+# Silence LiteLLM's noisy tracebacks
 logging.getLogger("LiteLLM").setLevel(logging.CRITICAL)
 logging.getLogger("litellm").setLevel(logging.CRITICAL)
 logging.getLogger("LiteLLM Router").setLevel(logging.CRITICAL)
 logging.getLogger("LiteLLM Proxy").setLevel(logging.CRITICAL)
+
+# Enable debug logging for our trace modules (captured in file)
+logging.getLogger("WhatsAppBot").setLevel(logging.DEBUG)
+logging.getLogger("ChannelManager").setLevel(logging.DEBUG)
 
 # Add parent directory to sys.path to allow importing from server
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +46,7 @@ from server.agent import agent # type: ignore
 from server.memory import memory # type: ignore
 from server.lite_router import router # type: ignore
 from server.config_manager import config_manager # type: ignore
+from server.whatsapp_bot import whatsapp_bot # type: ignore
 
 # Prompt Toolkit for rich input
 from prompt_toolkit import PromptSession # type: ignore
@@ -58,6 +79,26 @@ class ExecutionManager:
         self.live_ctx = None
 
 exec_manager = ExecutionManager()
+
+def validate_phone(text: str) -> bool | str:
+    """Validate phone number is in E.164 format (+ prefixed)."""
+    if not text:
+        return True
+    # Standard E.164 regex: + followed by 1-15 digits
+    if not re.match(r"^\+[1-9]\d{1,14}$", text.strip().replace(" ", "")):
+        return "Invalid E.164 format (e.g., +233201234567)"
+    return True
+
+def validate_phone_list(text: str) -> bool | str:
+    """Validate a comma-separated list of E.164 numbers."""
+    if not text or text.strip() == "*":
+        return True
+    parts = [p.strip() for p in text.split(",")]
+    for p in parts:
+        res = validate_phone(p)
+        if res is not True:
+            return f"Invalid number '{p}': {res}"
+    return True
 
 async def confirm_execution(tool_name: str, args: dict) -> bool:
     """Non-blocking execution confirmation."""
@@ -453,6 +494,7 @@ async def configure_integrations():
             ("🔧 Jira", "JIRA_API_TOKEN", "Issue tracking & sprint management"),
             ("💬 Discord", "DISCORD_BOT_TOKEN", "Bot messaging & server management"),
             ("📱 Telegram", "TELEGRAM_BOT_TOKEN", "Bot notifications & messaging"),
+            ("📱 WhatsApp", "WHATSAPP_LINKED", "QR-code based WhatsApp client"),
             ("🎙️ ElevenLabs", "ELEVENLABS_API_KEY", "Highly realistic Text-to-Speech & Speech-to-Text"),
             ("⚡ Groq", "GROQ_API_KEY", "Ultra-fast Speech-to-Text inference (optional)"),
         ]
@@ -573,6 +615,209 @@ async def configure_integrations():
             if key:
                 config_manager.set_key("GROQ_API_KEY", key)
                 rprint("[bold green]✅ Groq connected![/bold green]")
+        
+        elif "WhatsApp" in selection:
+            rprint("[bold cyan]📱 WhatsApp Integration (QR-Code Based)[/bold cyan]")
+            is_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+            status = "Linked ✅" if is_linked else "Not Linked ⬚"
+            rprint(f"Status: [bold]{status}[/bold]\n")
+
+            if is_linked:
+                re_link = await questionary.confirm("Already linked. Do you want to re-link (re-scan QR)?", default=False).ask_async()
+                if not re_link:
+                    continue
+                config_manager.delete_key("WHATSAPP_LINKED")
+
+            rprint("[dim]Starting WhatsApp client... a QR code will appear below.[/dim]")
+            rprint("[dim]Open WhatsApp → Linked Devices → Link a Device and scan the code.[/dim]\n")
+
+            import threading
+            import time
+            from server.whatsapp_bot import whatsapp_bot # type: ignore
+
+            # Start the bot in a background thread (it's blocking)
+            bot_thread = threading.Thread(target=whatsapp_bot.start, daemon=True)
+            bot_thread.start()
+
+            # Wait for QR to be generated (up to 15 seconds)
+            qr_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "whatsapp_qr.png")
+            waited = 0
+            while not os.path.exists(qr_path) and waited < 15:
+                await asyncio.sleep(1)
+                waited += 1
+                rprint(f"[dim]Waiting for QR ({waited}s)...[/dim]")
+
+            if os.path.exists(qr_path):
+                try:
+                    import segno # type: ignore
+                    # Re-read the QR data from segno isn't doable directly,
+                    # but the image was saved — show its path and try ASCII-art via the stored .txt fallback
+                    txt_qr = qr_path.replace(".png", ".txt")
+                    if os.path.exists(txt_qr):
+                        with open(txt_qr) as f:
+                            qr_data = f.read().strip()
+                        qr = segno.make(qr_data)
+                        qr.terminal(compact=True)
+                    else:
+                        rprint(f"[bold green]QR image saved:[/bold green] [yellow]{qr_path}[/yellow]")
+                        rprint("[dim]Open the image and scan it with WhatsApp.[/dim]")
+                except Exception:
+                    rprint(f"[bold green]QR image saved:[/bold green] [yellow]{qr_path}[/yellow]")
+                    rprint("[dim]Open the image and scan it with WhatsApp.[/dim]")
+
+                # Wait up to 60 seconds for the connection — check multiple indicators
+                rprint("\n[dim]Waiting for connection (up to 60 seconds)...[/dim]")
+                connected = False
+                for _ in range(60):
+                    # Check our flag, or the client's internal flag, or env key
+                    client_connected = getattr(getattr(whatsapp_bot, 'client', None), 'connected', False)
+                    env_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+                    if whatsapp_bot.is_connected or client_connected or env_linked:
+                        connected = True
+                        # Sync state across all indicators
+                        whatsapp_bot.is_connected = True
+                        config_manager.set_key("WHATSAPP_LINKED", "true")
+                        break
+                    await asyncio.sleep(1)
+
+                if connected:
+                    # Clean up QR files since they're now stale
+                    for f in [qr_path, qr_path.replace(".png", ".txt")]:
+                        try: os.remove(f)
+                        except: pass
+                    rprint("\n[bold green]✅ WhatsApp connected successfully![/bold green]")
+                    
+                    # POST-LINK SETUP WIZARD (OpenClaw style)
+                    rprint("\n[bold cyan]🔧 Initial Channel Setup[/bold cyan]")
+                    policy = await questionary.select(
+                        "How should Goku handle new WhatsApp DMs?",
+                        choices=[
+                            {"name": "Allowlist (Recommended: Only specific numbers)", "value": "allowlist"},
+                            {"name": "Open (Respond to everyone)", "value": "open"},
+                            {"name": "Disabled (Ignore all DMs)", "value": "disabled"}
+                        ]
+                    ).ask_async()
+                    config_manager.set_key("WHATSAPP_DM_POLICY", policy)
+                    
+                    if policy == "allowlist":
+                        numbers = await questionary.text(
+                            "Enter allowed phone numbers (comma-separated E.164, e.g., +233201234567):",
+                            placeholder="+233201234567",
+                            validate=validate_phone_list
+                        ).ask_async()
+                        if numbers:
+                            config_manager.set_key("WHATSAPP_ALLOW_FROM", numbers)
+                    
+                    owner_num = await questionary.text(
+                        "Enter your phone number (Owner Number) to always bypass filters (E.164):",
+                        placeholder="+23320XXXXXXX",
+                        validate=validate_phone
+                    ).ask_async()
+                    if owner_num:
+                        config_manager.set_key("GOKU_OWNER_NUMBER", owner_num)
+                    
+                    group_policy = await questionary.select(
+                        "How should Goku behave in WhatsApp Groups?",
+                        choices=[
+                            {"name": "Mentions Only (Responds when '@bot' or 'Goku' is seen)", "value": "mentions"},
+                            {"name": "Open (Responds to all messages in groups)", "value": "open"},
+                            {"name": "Disabled (Ignore all group messages)", "value": "disabled"}
+                        ]
+                    ).ask_async()
+                    config_manager.set_key("WHATSAPP_GROUP_POLICY", group_policy)
+                    rprint("[bold green]WhatsApp configuration complete![/bold green]")
+                else:
+                    rprint("\n[yellow]⏱ Timed out. Check the server logs — if you see 'Login event: success', the connection worked. Run `goku config` and re-open WhatsApp to confirm.[/yellow]")
+            else:
+                rprint("[red]Failed to generate QR code. Is the server running?[/red]")
+
+            await questionary.text("Press Enter to go back...").ask_async()
+
+
+async def goku_channels_menu():
+    """Dedicated menu to manage communication channels (WhatsApp, Telegram)."""
+    while True:
+        rprint(Panel(
+            "[bold cyan]📱 CHANNEL MANAGEMENT[/bold cyan]\n"
+            "[dim]Manage how Goku communicates with the world.[/dim]",
+            border_style="cyan"
+        ))
+        
+        wa_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+        wa_policy = config_manager.get_key("WHATSAPP_DM_POLICY", "allowlist")
+        wa_status = f"[green]Linked[/] (Policy: {wa_policy})" if wa_linked else "[dim]Not Linked[/]"
+        
+        tg_token = config_manager.get_key("TELEGRAM_BOT_TOKEN")
+        tg_status = "[green]Active[/]" if tg_token else "[dim]Not Configured[/]"
+        
+        owner_num = config_manager.get_key("GOKU_OWNER_NUMBER", "Not Set")
+        owner_status = f"[green]{owner_num}[/]" if owner_num != "Not Set" else "[dim]Not Set[/]"
+        
+        choice = await questionary.select(
+            "Select a channel to manage:",
+            choices=[
+                f"WhatsApp — {wa_status}",
+                f"Telegram — {tg_status}",
+                f"👤 Owner Number — {owner_status}",
+                "⬅️  Back"
+            ]
+        ).ask_async()
+        
+        if not choice or "Back" in choice:
+            break
+            
+        if "WhatsApp" in choice:
+            sub = await questionary.select(
+                "WhatsApp Settings:",
+                choices=[
+                    "Link / Re-link (QR Login)",
+                    "Set DM Policy (Open/Allowlist/Disabled)",
+                    "Manage Allowlist (Phone Numbers)",
+                    "Set Group Policy (Mentions/Open/Disabled)",
+                    "Reset WhatsApp Session (Logout)",
+                    "Done"
+                ]
+            ).ask_async()
+            
+            if sub == "Link / Re-link (QR Login)":
+                # Trigger the existing WhatsApp config logic
+                # For simplicity, we just call a dedicated function or reuse the block
+                # I'll extract the WhatsApp login logic to a helper later if needed
+                # For now, let's just use the integrations menu version
+                await configure_integrations() # This is a bit clumsy, but works for now
+            elif sub == "Set DM Policy (Open/Allowlist/Disabled)":
+                p = await questionary.select("Policy:", choices=["allowlist", "open", "disabled"]).ask_async()
+                if p: config_manager.set_key("WHATSAPP_DM_POLICY", p)
+            elif sub == "Manage Allowlist (Phone Numbers)":
+                curr = config_manager.get_key("WHATSAPP_ALLOW_FROM", "")
+                ns = await questionary.text(
+                    "Allowed numbers (comma separated):", 
+                    default=curr,
+                    validate=validate_phone_list
+                ).ask_async()
+                if ns is not None: config_manager.set_key("WHATSAPP_ALLOW_FROM", ns)
+            elif sub == "Set Group Policy (Mentions/Open/Disabled)":
+                p = await questionary.select("Group Policy:", choices=["mentions", "open", "disabled"]).ask_async()
+                if p: config_manager.set_key("WHATSAPP_GROUP_POLICY", p)
+            elif sub == "Reset WhatsApp Session (Logout)":
+                confirm = await questionary.confirm("Are you sure you want to delete your WhatsApp session? You will need to re-link with a QR code.").ask_async()
+                if confirm:
+                    success = whatsapp_bot.logout()
+                    if success: rprint("[bold green]WhatsApp session cleared. Restart Goku to link fresh.[/bold green]")
+                    else: rprint("[bold red]Failed to clear session. Check server logs.[/bold red]")
+                
+        elif "Telegram" in choice:
+            token = await questionary.password("Telegram Bot Token:", default=tg_token).ask_async()
+            if token: config_manager.set_key("TELEGRAM_BOT_TOKEN", token)
+            
+        elif "Owner Number" in choice:
+            curr = config_manager.get_key("GOKU_OWNER_NUMBER", "")
+            new_num = await questionary.text(
+                "Enter your number (E.164) to bypass all filters:", 
+                default=curr,
+                validate=validate_phone
+            ).ask_async()
+            if new_num is not None: config_manager.set_key("GOKU_OWNER_NUMBER", new_num)
 
 
 async def configure_mcp_servers():
@@ -821,6 +1066,46 @@ async def goku_config_menu():
 
 
 @app.command()
+def logs(lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show")):
+    """View Goku diagnostic logs."""
+    if not os.path.exists(LOG_FILE):
+        rprint("[yellow]No log file found yet.[/yellow]")
+        return
+    
+    rprint(Panel(f"[bold green]📜 GOKU DIAGNOSTIC LOGS[/bold green] (Last {lines} lines)", border_style="cyan"))
+    try:
+        with open(LOG_FILE, "r") as f:
+            all_lines = f.readlines()
+            start_idx = max(0, len(all_lines) - lines)
+            last_lines = [all_lines[i] for i in range(start_idx, len(all_lines))]
+            for line in last_lines:
+                # Colorize based on level
+                if "ERROR" in line: rprint(f"[red]{line.strip()}[/red]")
+                elif "WARNING" in line: rprint(f"[yellow]{line.strip()}[/yellow]")
+                elif "DEBUG" in line: rprint(f"[dim]{line.strip()}[/dim]")
+                else: rprint(line.strip())
+    except Exception as e:
+        rprint(f"[red]Failed to read logs: {e}[/red]")
+
+@app.command()
+def update():
+    """Update Goku to the latest version via git."""
+    rprint("[bold green]⬇️  Checking for updates...[/bold green]")
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    update_sh = os.path.join(script_dir, "goku.sh")
+    
+    if not os.path.exists(update_sh):
+        rprint("[red]Global wrapper goku.sh not found. Please pull manually.[/red]")
+        return
+
+    # Call the existing update logic in goku.sh
+    import subprocess
+    try:
+        subprocess.run(["bash", update_sh, "update"], check=True)
+    except Exception as e:
+        rprint(f"[red]Update failed: {e}[/red]")
+
+@app.command()
 def config():
     """Open Goku configuration center."""
     try:
@@ -844,7 +1129,7 @@ def interactive():
             return
 
     console.clear()
-    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v2.2[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
+    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v2.5[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
     
     # Run the main async loop
     try:
@@ -866,6 +1151,20 @@ async def interactive_loop():
             rprint(f"[bold red]❌ Failed to start Telegram Bot: {e}[/bold red]")
     else:
         rprint("[bold yellow]⚠️  TELEGRAM_BOT_TOKEN not found in .env. Telegram interface disabled.[/bold yellow]")
+
+    # Start WhatsApp Bot if linked
+    wa_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+    if wa_linked:
+        try:
+            from server.whatsapp_bot import run_whatsapp_bot # type: ignore
+            # Pass our current running loop for thread-safe bridge
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(run_whatsapp_bot(loop))
+            rprint("[bold green]📱 WhatsApp bot connected and listening...[/bold green]")
+        except Exception as e:
+            rprint(f"[bold red]❌ Failed to start WhatsApp Bot: {e}[/bold red]")
+    else:
+        rprint("[bold yellow]⚠️  WhatsApp not linked. Use '/channels' to link.[/bold yellow]")
 
     # Initialize session with history and lexer
     session = PromptSession(
@@ -953,10 +1252,17 @@ async def interactive_loop():
                 continue
 
             elif cmd == "/ping":
-                token = config_manager.get_key("TELEGRAM_BOT_TOKEN")
-                status = "✅ Online" if token else "🚫 Not Configured"
+                # Telegram status
+                tg_token = config_manager.get_key("TELEGRAM_BOT_TOKEN")
+                tg_status = "✅ Online" if tg_token else "🚫 Not Configured"
+                
+                # WhatsApp status
+                wa_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+                wa_status = "✅ Linked" if wa_linked else "⬚ Not Linked"
+                
                 rprint(f"[bold green]🏓 Pong! Agent is active.[/bold green]")
-                rprint(f"[dim]Telegram Bot: {status}[/dim]")
+                rprint(f"[dim]Telegram Bot: {tg_status}[/dim]")
+                rprint(f"[dim]WhatsApp Bot: {wa_status}[/dim]")
                 continue
 
             elif cmd == "/view":
@@ -973,6 +1279,10 @@ async def interactive_loop():
                 # Fall through to run_chat(query)
                 pass
 
+            elif cmd == "/channels":
+                await goku_channels_menu()
+                continue
+
             elif cmd == "/config":
                 await goku_config_menu()
                 continue
@@ -983,6 +1293,7 @@ async def interactive_loop():
                 table.add_column("Description", style="white")
                 table.add_row("/help", "Show this help message")
                 table.add_row("/ping", "Check agent status")
+                table.add_row("/channels", "Manage communication channels")
                 table.add_row("/config", "Open configuration menu")
                 table.add_row("/provider [name]", "Switch AI provider (openai, anthropic, ollama...)")
                 table.add_row("/models [provider]", "List available models")

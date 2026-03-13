@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, Key, Globe, Cpu, Github, Settings as SettingsIcon } from 'lucide-react';
+import { X, Save, Key, Globe, Cpu, Github, Settings as SettingsIcon, MessageSquare, Send } from 'lucide-react';
 import axios from 'axios';
 
 export const SettingsModal = ({ isOpen, onClose, onSave }) => {
     const [config, setConfig] = useState({
         OPENAI_API_KEY: '',
         ANTHROPIC_API_KEY: '',
+        GOOGLE_API_KEY: '',
+        GEMINI_API_KEY: '',
         GITHUB_TOKEN: '',
+        TELEGRAM_BOT_TOKEN: '',
         GOKU_MODEL: 'default',
-        OLLAMA_BASE_URL: 'http://localhost:11434'
+        OLLAMA_BASE_URL: 'http://localhost:11434',
+        WHATSAPP_CONNECTED: false
     });
     const [loading, setLoading] = useState(false);
 
@@ -100,6 +104,90 @@ export const SettingsModal = ({ isOpen, onClose, onSave }) => {
                                             placeholder="ghp_..."
                                         />
                                     </div>
+                                    <div className="space-y-1.5">
+                                        <span className="text-[11px] text-slate-400">Telegram Bot Token</span>
+                                        <div className="flex space-x-2">
+                                            <input
+                                                type="password"
+                                                value={config.TELEGRAM_BOT_TOKEN}
+                                                onChange={(e) => setConfig({ ...config, TELEGRAM_BOT_TOKEN: e.target.value })}
+                                                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none transition-colors"
+                                                placeholder="123456:ABC-..."
+                                            />
+                                            <div className="flex items-center px-3 bg-slate-800 rounded-xl border border-slate-700">
+                                                <Send className="w-3.5 h-3.5 text-sky-400 mr-2" />
+                                                <span className="text-[10px] font-bold text-sky-400 uppercase">Active</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4 pt-4 border-t border-slate-800/50">
+                                <label className="flex items-center space-x-2 text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                    <MessageSquare className="w-3 h-3" />
+                                    <span>Communication Channels</span>
+                                </label>
+                                <div className="space-y-3">
+                                    <div className="flex flex-col space-y-3 p-4 bg-slate-950 border border-slate-800 rounded-2xl">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center space-x-3">
+                                                <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center">
+                                                    <MessageSquare className="w-4 h-4 text-green-500" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-bold text-slate-200">WhatsApp Integration</p>
+                                                    <p className="text-[10px] text-slate-500">QR-code based linking</p>
+                                                </div>
+                                            </div>
+                                            <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${config.WHATSAPP_CONNECTED ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                                {config.WHATSAPP_CONNECTED ? '● Connected' : '○ Not Linked'}
+                                            </div>
+                                        </div>
+                                        
+                                        {config.WHATSAPP_CONNECTED && (
+                                            <div className="pt-3 border-t border-slate-800 space-y-4">
+                                                <div className="space-y-1.5">
+                                                    <span className="text-[11px] text-slate-400">DM Policy</span>
+                                                    <select 
+                                                        value={config.WHATSAPP_DM_POLICY || 'allowlist'}
+                                                        onChange={(e) => setConfig({...config, WHATSAPP_DM_POLICY: e.target.value})}
+                                                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none"
+                                                    >
+                                                        <option value="allowlist">Allowlist Only</option>
+                                                        <option value="open">Open (Everyone)</option>
+                                                        <option value="disabled">Disabled</option>
+                                                    </select>
+                                                </div>
+                                                
+                                                {config.WHATSAPP_DM_POLICY === 'allowlist' && (
+                                                    <div className="space-y-1.5">
+                                                        <span className="text-[11px] text-slate-400">Allow From (Comma separated numbers)</span>
+                                                        <input 
+                                                            type="text"
+                                                            value={config.WHATSAPP_ALLOW_FROM || ''}
+                                                            onChange={(e) => setConfig({...config, WHATSAPP_ALLOW_FROM: e.target.value})}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none"
+                                                            placeholder="+233201234567, ..."
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                <div className="space-y-1.5">
+                                                    <span className="text-[11px] text-slate-400">Group Policy</span>
+                                                    <select 
+                                                        value={config.WHATSAPP_GROUP_POLICY || 'mentions'}
+                                                        onChange={(e) => setConfig({...config, WHATSAPP_GROUP_POLICY: e.target.value})}
+                                                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none"
+                                                    >
+                                                        <option value="mentions">Mentions Only</option>
+                                                        <option value="open">Open (All)</option>
+                                                        <option value="disabled">Disabled</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -116,6 +204,16 @@ export const SettingsModal = ({ isOpen, onClose, onSave }) => {
                                         onChange={(e) => setConfig({ ...config, GOKU_MODEL: e.target.value })}
                                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none transition-colors"
                                         placeholder="default (e.g. github/gpt-4o)"
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <span className="text-[11px] text-slate-400">Owner Phone Number (E.164)</span>
+                                    <input
+                                        type="text"
+                                        value={config.GOKU_OWNER_NUMBER || ''}
+                                        onChange={(e) => setConfig({ ...config, GOKU_OWNER_NUMBER: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-sky-500/50 outline-none transition-colors"
+                                        placeholder="+23320XXXXXXX"
                                     />
                                 </div>
                             </div>

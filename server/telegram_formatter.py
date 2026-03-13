@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Telegram MarkdownV2 Formatter for Goku.
 
@@ -30,25 +31,90 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     then apply inline formatting conversions to non-code segments.
     """
 
-    # ── Step 1: Extract code blocks so they aren't mangled ──────────────────
-    code_blocks = []
+    # ── Step 0: Extract code blocks so they aren't mangled ──────────────────
+    code_blocks: list[str] = []
     
-    def _stash_code_block(match):
+    def _stash_code_block(match: re.Match) -> str:
         lang = match.group(1) or ""
         code = match.group(2)
-        placeholder = f"\x00CODEBLOCK{len(code_blocks)}\x00"
-        # In MarkdownV2, pre-formatted blocks use: ```lang\ncode```
-        # Code inside ``` does NOT need escaping.
-        code_blocks.append(cast(Any, f"```{lang}\n{code}```"))
-        return placeholder
-    
-    # Match fenced code blocks (```lang ... ```)
+        
+        # Check if this code block is actually a table.
+        # If so, we want to align it properly (calculate widths).
+        if re.search(r'\|.*\|', code):
+            # Use a dummy match since _format_table_internal expects one
+            class MockMatch:
+                def __init__(self, text): self._text = text
+                def group(self, _): return self._text
+            
+            # Format the table content ONLY (no backticks)
+            formatted = _format_table_internal(MockMatch(code.strip()), wrap_in_code=False)
+            code_blocks.append(cast(Any, f"```{lang}\n{formatted}\n```"))
+        else:
+            code_blocks.append(cast(Any, f"```{lang}\n{code}```"))
+        return f"\x00CODEBLOCK{len(code_blocks) - 1}\x00"
+
+    # Define the table formatter utility
+    def _format_table_internal(match, wrap_in_code=True) -> str:
+        table_text = str(match.group(0)).strip()
+        lines = [line.strip() for line in table_text.split('\n') if line.strip()]
+        if len(lines) < 2: return table_text
+        
+        def split_row(row: str) -> List[str]:
+            cells = [cell.strip() for cell in row.split('|')]
+            if len(cells) > 0 and not cells[0]: cells.pop(0)
+            if len(cells) > 0 and not cells[-1]: cells.pop(-1)
+            return cells
+
+        rows = []
+        for line in lines:
+            if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
+            rows.append(split_row(line))
+        
+        if not rows: return table_text
+        
+        num_cols = max(len(row) for row in rows)
+        col_widths_dict = {i: 0 for i in range(num_cols)}
+        for row in rows:
+            for i, cell in enumerate(row):
+                if i in col_widths_dict:
+                    cell_len = len(cell)
+                    if cell_len > col_widths_dict.get(i, 0):
+                        col_widths_dict.update({i: cell_len})
+        
+        formatted_lines = []
+        for i, row in enumerate(rows):
+            padded_cells = []
+            for j in range(num_cols):
+                val = row[j] if j < len(row) else ""
+                cw = col_widths_dict.get(j, 0)
+                padded_cells.append(f" {val.ljust(cw)} ")
+            formatted_lines.append("|" + "|".join(padded_cells) + "|")
+            if i == 0:
+                sep_parts = []
+                for w in range(num_cols):
+                    sep_parts.append("-" * (col_widths_dict.get(w, 0) + 2))
+                sep = "|" + "|".join(sep_parts) + "|"
+                formatted_lines.append(sep)
+        
+        res = "\n".join(formatted_lines)
+        if wrap_in_code:
+            # We must stash this NEWly created code block so it doesn't get escaped in Step 4
+            placeholder = f"\x00CODEBLOCK{len(code_blocks)}\x00"
+            code_blocks.append(cast(Any, f"```\n{res}\n```"))
+            return f"\n{placeholder}\n"
+        return res
+
+    # Match fenced code blocks (```lang ... ```) - now more lenient with opening line
     text = re.sub(
-        r'```(\w*)\n(.*?)```',
+        r'```(\w*)\s*\n(.*?)```',
         _stash_code_block,
         text,
         flags=re.DOTALL
     )
+
+    # ── Step 1: Handle Markdown Tables in the remaining text ──────────────────────
+    table_pattern = r'(?m)^ {0,3}\|?.*\|.*\|?.*?\n {0,3}\|?[\s\-:|]+\|[\s\-:|]*\n(?: {0,3}\|?.*\|.*\|?.*?\n?)*'
+    text = re.sub(table_pattern, lambda m: _format_table_internal(m, wrap_in_code=True), text)
 
     # ── Step 2: Extract inline code so it isn't mangled ─────────────────────
     inline_codes = []
@@ -84,17 +150,24 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     
     for line in lines:
         stripped = line.strip()
-        
-        # Headings → Bold uppercase (Telegram has no heading support)
+        if not stripped:
+            converted_lines.append("")
+            continue
+            
+        # Check if line is a placeholder - if so, don't apply inline formatting to it
+        if re.match(r'^\x00(CODEBLOCK|INLINECODE|LINK)\d+\x00$', stripped):
+            converted_lines.append(cast(Any, stripped))
+            continue
+
+        # Headings → Bold uppercase
         heading_match = re.match(r'^(#{1,6})\s+(.*)', stripped)
         if heading_match:
             heading_text = heading_match.group(2).strip()
-            # Escape first, then wrap in bold
             escaped = _escape_mdv2(heading_text)
             converted_lines.append(cast(Any, f"\n*{escaped.upper()}*\n"))
             continue
 
-        # Horizontal rules → simple separator
+        # Horizontal rules
         if re.match(r'^[-*_]{3,}\s*$', stripped):
             converted_lines.append(cast(Any, _escape_mdv2("───────────")))
             continue
@@ -134,16 +207,20 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     # ── Step 6: Clean up excessive blank lines ──────────────────────────────
     text = re.sub(r'\n{3,}', '\n\n', text)
     
+    # Final safety pass for remaining hashtags
+    text = re.sub(r'(?<!\\)#', r'\\#', text)
+    
     return text.strip()
-
 
 def _apply_inline_formatting(text: str) -> str:
     """
     Convert inline markdown (bold, italic, strikethrough) and escape
     remaining special characters for MarkdownV2.
     """
+    if not text:
+        return ""
+
     # Bold: **text** or __text__ → *text* in MarkdownV2
-    # We use placeholders so the italic regex doesn't consume our bold markers
     BOLD_OPEN = "\x01BOPEN\x01"
     BOLD_CLOSE = "\x01BCLOSE\x01"
     
@@ -156,7 +233,6 @@ def _apply_inline_formatting(text: str) -> str:
     text = re.sub(r'__(.+?)__', _bold_replace, text)
     
     # Italic: *text* or _text_ → _text_ in MarkdownV2
-    # We use placeholders to prevent escaping our italic markers
     ITALIC_OPEN = "\x01IOPEN\x01"
     ITALIC_CLOSE = "\x01ICLOSE\x01"
     
@@ -165,8 +241,6 @@ def _apply_inline_formatting(text: str) -> str:
         escaped_inner = _escape_mdv2(inner)
         return f"{ITALIC_OPEN}{escaped_inner}{ITALIC_CLOSE}"
     
-    # Only match single * or _ that aren't already part of ** or __
-    # For _, also ensure it's not mid-word (like in snake_case_variables)
     text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', _italic_replace, text)
     text = re.sub(r'(?<![A-Za-z0-9])_(?!_)(.+?)(?<!_)_(?![A-Za-z0-9])', _italic_replace, text)
     
@@ -181,49 +255,37 @@ def _apply_inline_formatting(text: str) -> str:
     
     text = re.sub(r'~~(.+?)~~', _strike_replace, text)
 
-    # Now escape any remaining special characters that aren't part of formatting
-    result = []
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        
-        # Skip already-escaped characters
-        if ch == '\\' and i + 1 < len(text):
-            result.append(cast(Any, ch))
-            result.append(cast(Any, text[i + 1]))
-            i += 2
+    # Now escape any remaining special characters that aren't part of formatting.
+    # We protect placeholders by splitting the text into segments.
+    # Pattern matches any of our protected markers: \x00... \x00, \b, \r, \x01...
+    protected_pattern = r'(\x00(?:CODEBLOCK|INLINE|WA_THINKING|WA_CALL)\d+\x00|\b|\r|\x01[A-Z]+\x01)'
+    segments = re.split(protected_pattern, text)
+    
+    result_segments = []
+    for seg in segments:
+        if not seg:
             continue
-        
-        # Placeholder bytes (formatting markers we just placed)
-        if ch == '\b' or ch == '\r' or ch == '\x01':
-            result.append(cast(Any, ch))
-            i += 1
-            continue
-        # Code placeholders (already handled upstream)
-        if ch == '`':
-            result.append(cast(Any, ch))
-            i += 1
-            continue
-        
-        # Escape remaining special chars
-        if ch in _SPECIAL_CHARS:
-            result.append(cast(Any, f'\\{ch}'))
+        # If it's a protected segment, keep it as is
+        if re.match(protected_pattern, seg):
+            result_segments.append(seg)
         else:
-            result.append(cast(Any, ch))
-        
-        i += 1
+            # Escape special MarkdownV2 characters in raw text segments
+            # We must also handle backticks specifically if they aren't part of a marker
+            # though Step 0/1/2 should have stashed them.
+            escaped = _escape_mdv2(seg)
+            result_segments.append(escaped)
     
-    text = ''.join(result)
+    final_text = ''.join(result_segments)
     
-    # Restore bold and italic placeholders to actual MarkdownV2 markers
-    text = text.replace(BOLD_OPEN, "*")
-    text = text.replace(BOLD_CLOSE, "*")
-    text = text.replace(ITALIC_OPEN, "_")
-    text = text.replace(ITALIC_CLOSE, "_")
-    text = text.replace(STRIKE_OPEN, "~")
-    text = text.replace(STRIKE_CLOSE, "~")
+    # Restore bold and italic placeholders
+    final_text = final_text.replace(BOLD_OPEN, "*")
+    final_text = final_text.replace(BOLD_CLOSE, "*")
+    final_text = final_text.replace(ITALIC_OPEN, "_")
+    final_text = final_text.replace(ITALIC_CLOSE, "_")
+    final_text = final_text.replace(STRIKE_OPEN, "~")
+    final_text = final_text.replace(STRIKE_CLOSE, "~")
     
-    return text
+    return final_text
 
 
 def format_for_telegram(text: str) -> str:
@@ -246,7 +308,7 @@ def format_for_telegram(text: str) -> str:
         return _escape_mdv2(text)
 
 
-def smart_chunk(text: str, max_length: int = 4096) -> list[str]:
+def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
     """
     Split a long MarkdownV2 message into chunks that respect Telegram's
     4096 character limit, splitting on paragraph boundaries and never
@@ -262,42 +324,68 @@ def smart_chunk(text: str, max_length: int = 4096) -> list[str]:
     if len(text) <= max_length:
         return [text]
     
-    chunks = []
-    remaining = text
+    chunks: List[str] = []
+    rem_text: str = text
     
-    while remaining:
-        if len(remaining) <= max_length:
-            chunks.append(cast(Any, remaining))
+    while rem_text:
+        # Re-assert for Pyre
+        if not isinstance(rem_text, str): break
+        
+        text_len = len(rem_text)
+        if text_len <= max_length:
+            chunks.append(rem_text)
             break
         
-        # Find a good split point within the limit
-        split_at = max_length
+        # Extract the segment we can work with using regex to keep Pyre happy
+        limit_pattern = r'^(.{1,' + str(max_length) + r'})'
+        limit_match = re.match(limit_pattern, rem_text, flags=re.DOTALL)
+        if not limit_match:
+            chunks.append(rem_text)
+            break
+            
+        head = str(limit_match.group(1))
+        split_at = len(head)
         
         # Prefer splitting at double newline (paragraph boundary)
-        para_break = cast(Any, remaining).rfind('\n\n', 0, max_length)
-        if para_break > max_length // 3:  # Don't split too early
+        para_break = head.rfind('\n\n')
+        if para_break > max_length // 3:
             split_at = para_break
         else:
             # Fall back to single newline
-            line_break = cast(Any, remaining).rfind('\n', 0, max_length)
+            line_break = head.rfind('\n')
             if line_break > max_length // 3:
                 split_at = line_break
         
         # Safety: check we're not splitting inside a code block
-        chunk_candidate = cast(Any, remaining)[:split_at]
-        open_code_blocks = chunk_candidate.count('```')
-        if open_code_blocks % 2 != 0:
+        # Use regex to get the prefix up to split_at
+        prefix_pattern = r'^(.{0,' + str(split_at) + r'})'
+        prefix_match = re.match(prefix_pattern, rem_text, flags=re.DOTALL)
+        
+        chunk_candidate = ""
+        if prefix_match:
+            chunk_candidate = str(prefix_match.group(1))
+        else:
+            chunk_candidate = head # Fallback
+            
+        if chunk_candidate.count('```') % 2 != 0:
             # We'd split inside a code block — find the start of this code block
-            # and split before it
             last_code_start = chunk_candidate.rfind('```')
-            # Look for a newline before the code block
-            safe_split = remaining.rfind('\n', 0, last_code_start)
+            # Find newline before code (searching in the same chunk_candidate)
+            safe_split = chunk_candidate.rfind('\n', 0, last_code_start)
             if safe_split > 0:
                 split_at = safe_split
-            # else: can't avoid it, split at max_length anyway
+                # Final re-match for the safe split point
+                final_pattern = r'^(.{0,' + str(split_at) + r'})'
+                final_match = re.match(final_pattern, rem_text, flags=re.DOTALL)
+                if final_match:
+                    chunk_candidate = str(final_match.group(1))
         
-        chunks.append(cast(Any, remaining)[:split_at].rstrip())
-        remaining = cast(Any, remaining)[split_at:].lstrip('\n')
+        # Finalize this chunk
+        chunks.append(chunk_candidate.rstrip())
+        # Update rem_text using regex to remove what we just took
+        # We need to re-verify the split point pattern matches exactly what we took
+        take_pattern = r'^(.{0,' + str(split_at) + r'})'
+        rem_text = re.sub(take_pattern, '', rem_text, count=1, flags=re.DOTALL).lstrip('\n')
     
     return chunks
 

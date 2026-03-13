@@ -2,7 +2,7 @@ import os
 import uvicorn # type: ignore
 from fastapi import FastAPI, HTTPException # type: ignore
 from pydantic import BaseModel # type: ignore
-from markitdown import MarkItDown # type: ignore
+import importlib
 import logging
 
 # Configure logging
@@ -10,7 +10,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MCP-Document")
 
 app = FastAPI(title="Goku Document Analysis MCP", version="1.0.0")
-md = MarkItDown()
+
+# Lazy loader for MarkItDown to handle hot-installed dependencies
+_md_instance = None
+
+def get_markitdown():
+    global _md_instance
+    if _md_instance is None:
+        try:
+            # Refresh import cache to detect newly installed pip packages (docx, etc)
+            importlib.invalidate_caches()
+            from markitdown import MarkItDown # type: ignore
+            _md_instance = MarkItDown()
+        except ImportError as e:
+            logger.error(f"MarkItDown or its dependencies missing: {e}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"MarkItDown dependencies missing. Try running: pip install markitdown[docx,pptx,pdf]"
+            )
+    return _md_instance
 
 class ToolCall(BaseModel):
     name: str
@@ -49,6 +67,7 @@ async def call_tool(tool_call: ToolCall):
         
         try:
             logger.info(f"Parsing document: {file_path}")
+            md = get_markitdown()
             result = md.convert(file_path)
             return {
                 "content": result.text_content,

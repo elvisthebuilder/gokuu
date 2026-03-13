@@ -11,7 +11,7 @@ import hashlib # type: ignore
 from PIL import Image # type: ignore
 import io
 MAX_IMAGE_DIMENSION = 800
-from typing import List, Dict, Any, AsyncGenerator, cast, Optional
+from typing import List, Dict, Any, AsyncGenerator, cast, Optional, Callable, Awaitable
 from types import SimpleNamespace
 from server.lite_router import router # type: ignore
 from server.mcp_manager import mcp_manager # type: ignore
@@ -24,7 +24,9 @@ class GokuAgent:
     async def get_models(self, provider: str | None = None):
         return await router.get_available_models(provider)
 
-    def __init__(self):
+    def __init__(self, is_sub_agent: bool = False):
+        self.is_sub_agent = is_sub_agent
+        self.session_reacted: Dict[str, bool] = {}
         self.system_prompt = (
             "You are GOKU — a high-performance AI terminal agent built for precise execution, "
             "intelligent planning, and resilient problem solving.\n\n"
@@ -126,12 +128,16 @@ class GokuAgent:
             "• NEVER just reply 'done', 'finished', 'analysis complete', or 'Waiting for your next request'.\n"
             "• Provide a natural, insightful summary of what the file contains.\n"
             "• If the user sent ONLY a file with no message, analyze it and RESPOND CONVERSATIONALLY:\n"
-            "  - Describe what you see/found (e.g. 'This looks like a Python script that handles user authentication...')\n"
+            "  - Describe what you see/found (e.g. 'This looks like a Python script that handles user authentication...')\n\n"
+            "16️⃣ META-MANAGEMENT & EVOLUTION\n"
+            "• You are the CAPTAIN of an evolving team. If a task is too large for a single turn (e.g. repo-wide refactor, deep research), DELEGATE to a sub-agent using `@meta_manager` or a specific specialist like `@coder`.\n"
+            "• If you find yourself repeatedly performing a task for which no skill exists, ask the `@meta_manager` to create one.\n"
+            "• Use the `learn_lesson` tool to record mission-critical insights for your sub-agents.\n"
             "  - EXPECT TO CONTINUE THE CONVERSATION. Ask a specific question about what you just analyzed (e.g. 'Do you want me to refactor this script?' or 'Should I explain how the login flow works?').\n"
             "• NEVER use generic robotic sign-offs like 'Let me know if you need anything else' or 'Waiting for instructions'. Take the initiative.\n"
             "• If the user sent a file WITH a message, address their specific request.\n"
             "• FOR IMAGES: You have Native Vision capabilities! Never try to write Python scripts (like pytesseract or OpenCV) to 'see' an image. You can see it natively. Only use python scripts for image manipulation, NOT for basic viewing or reading text.\n"
-            "• FOR VIDEOS/DOCS: Use native Python libraries (e.g. cv2, PyPDF2, pdfplumber) to parse content over slow bash commands.\n"
+            "• FOR VIDEOS/DOCS: ALWAYS use the `mcp_document__parse_document` tool first. It is the most robust way to read content. Only if it fails or is unavailable should you fall back to native Python libraries (e.g. markitdown, python-docx, pdfplumber) or shell commands.\n"
             "• If the analysis will take a while, output a message FIRST (e.g. '⏳ Analyzing your file...') to let the user know.\n\n"
             
             "16️⃣ COMPLETION CRITERIA\n"
@@ -225,8 +231,13 @@ class GokuAgent:
         if session_id not in self.session_loop_data:
             self.session_loop_data[session_id] = {"count": 0, "hash": None}
             
-        # Create hash of current response
-        current_hash = hashlib.md5((content + str(len(tool_calls) if tool_calls else 0)).encode()).hexdigest()
+        # Create hash of current response including tool name/args to allow progress
+        tool_sig = ""
+        if tool_calls:
+            for tc in tool_calls:
+                tool_sig += f"{tc.function.name}({tc.function.arguments})"
+        
+        current_hash = hashlib.md5((content + tool_sig).encode()).hexdigest()
         
         # Check for repeated responses
         if current_hash == self.session_loop_data[session_id]["hash"]:
@@ -286,20 +297,31 @@ class GokuAgent:
                 "• Output is rendered as HTML/markdown — use headers, bold, code blocks, and formatting.\n"
                 "• The user can see a split view with your responses and an intelligence/thinking log panel.\n\n"
             )
+        elif source == "whatsapp":
+            env = (
+                "📍 CURRENT INTERFACE: WhatsApp Messenger\n"
+                "• The user is chatting via WhatsApp — a high-speed mobile messaging app.\n"
+                "• Your output will be auto-converted to WhatsApp native markdown.\n"
+                "• Use *bold text* for headers and emphasis.\n"
+                "• Use _italics_ for secondary notes or sub-labels.\n"
+                "• Use `inline code` for filenames or single commands.\n"
+                "• Use triple backticks (```) for code blocks — these are natively scrollable.\n"
+                "• USE TABLES freely — they will be auto-formatted into premium monospaced blocks.\n"
+                "• Keep layout clean and vertical for mobile ease.\n\n"
+            )
         elif source == "telegram":
             env = (
                 "📍 CURRENT INTERFACE: Telegram Messenger\n"
                 "• The user is chatting via Telegram — a mobile messaging app.\n"
-                "• You still have full access to bash, file tools, and MCP tools.\n"
                 "• Your output will be auto-converted to Telegram MarkdownV2 for rich formatting.\n\n"
                 "📝 TELEGRAM FORMATTING GUIDELINES:\n"
                 "• Use **bold text** for emphasis and section headers (e.g. **🔧 Setup**).\n"
                 "• Use bullet points (- or •) for lists — they render cleanly on mobile.\n"
                 "• Use `inline code` for commands, file names, and technical terms.\n"
                 "• Use fenced code blocks (```) for code snippets — keep them short.\n"
+                "• USE TABLES freely — they will be auto-formatted into premium monospaced blocks.\n"
                 "• Use emoji as section labels (🔍, ✅, ⚠️, 💡) to improve scannability.\n"
                 "• Keep paragraphs short (2-3 sentences max) for mobile readability.\n"
-                "• AVOID markdown tables — they don't render in Telegram. Use bullet lists instead.\n"
                 "• AVOID deeply nested formatting or complex markdown structures.\n"
                 "• Messages over 4096 characters will be split, so be concise when possible.\n"
                 "• The user may be on mobile — be extra clear and ask for confirmation before multi-step operations.\n\n"
@@ -352,13 +374,14 @@ class GokuAgent:
             logger.error(f"External vision error ({provider}): {e}")
             return f"[Error during external vision analysis: {e}]"
 
-    async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default") -> AsyncGenerator[Dict[str, Any], None]:
+    async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default", react_fn: Optional[Callable[[str], Awaitable[Any]]] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Runs the agent loop and yields thoughts, messages, and tool results.
         
         Args:
             user_text: The user's input message.
             source: The interface source — 'cli', 'web', or 'telegram'.
             session_id: The ID for the conversation session (e.g. chat_id).
+            react_fn: An optional asynchronous function to send a reaction to the user's message.
         """
         if not user_text:
             return
@@ -568,6 +591,113 @@ class GokuAgent:
             }
         })
 
+        llm_tools.append({
+            "type": "function",
+            "function": {
+                "name": "learn_lesson",
+                "description": "Record a lesson learned or mission-critical insight for a specific skill context. This helps the team improve over time.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lesson": {"type": "string", "description": "The insight or pattern discovered."},
+                        "skill_context": {"type": "string", "description": "The skill name (e.g. 'coder', 'researcher', 'meta_manager') this lesson applies to."}
+                    },
+                    "required": ["lesson", "skill_context"]
+                }
+            }
+        })
+
+        if react_fn:
+            llm_tools.append({
+                "type": "function",
+                "function": {
+                    "name": "react_to_message",
+                    "description": "React to the current message with an emoji (e.g., 👍, 😂, 🎉, ❤️, 😮, 😢). Use this ONCE to set the final reaction for the current message. Sequential calls overwrite each other, so only use for your final reaction choice.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "emoji": {"type": "string", "description": "The emoji character to use for the reaction."}
+                        },
+                        "required": ["emoji"]
+                    }
+                }
+            })
+
+        # DEF Pipeline Tools
+        llm_tools.extend([
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_to_audit",
+                    "description": "Submit a report or proposal to the Audit Department for review. Use this as your final action if you are `@health` or `@research`.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "report": {"type": "string", "description": "The detailed findings, vulnerabilities, or research proposals."}
+                        },
+                        "required": ["report"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "request_user_approval",
+                    "description": "Submit an audited implementation plan for user approval. Use this as your final action if you are `@audit`. **NEVER implementation code yourself.**",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "audit_report": {"type": "string", "description": "The detailed verdict and step-by-step implementation plan."}
+                        },
+                        "required": ["audit_report"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "schedule_implementation",
+                    "description": "Schedule an approved job for a specific time. Use this when the user says 'Schedule this for [Time]'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "job_id": {"type": "string", "description": "The ID of the job to schedule."},
+                            "scheduled_time_iso": {"type": "string", "description": "The ISO-8601 timestamp for when execution should begin (e.g., 2026-03-14T03:00:00Z)."}
+                        },
+                        "required": ["job_id", "scheduled_time_iso"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "complete_implementation",
+                    "description": "Mark a background implementation job as successfully completed. Use this as your final action if you are `@implement`.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string", "description": "Summary of exactly what was changed and verified."}
+                        },
+                        "required": ["summary"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "dispatch_implementation",
+                    "description": "Dispatch the Implementer agent to execute an approved job IMMEDIATELY. Use this when the user says 'Yes' or 'Go ahead' to a pending proposal.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "job_id": {"type": "string", "description": "The ID of the job to execute."}
+                        },
+                        "required": ["job_id"]
+                    }
+                }
+            }
+        ])
+
         # Load skills
         try:
             ingestor = OpenClawIngestor(os.getcwd())
@@ -650,12 +780,29 @@ class GokuAgent:
             if tool_calls_accumulator:
                 for idx in sorted(tool_calls_accumulator.keys()):
                     tc = tool_calls_accumulator[idx]
+                    
+                    # Ensure arguments are a valid JSON string (Ollama can sometimes cut off strings)
+                    args_str = tc['function']['arguments']
+                    if isinstance(args_str, str) and args_str.strip():
+                        try:
+                            json.loads(args_str)
+                        except json.JSONDecodeError:
+                            # If it's malformed, try to append a closing brace, or just default to empty
+                            if not args_str.strip().endswith('}'): args_str += '}'
+                            try:
+                                json.loads(args_str)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to salvage tool arguments, defaulting to empty: {args_str}")
+                                args_str = "{}"
+                    else:
+                        args_str = "{}"
+                        
                     tool_obj = SimpleNamespace(
                         id=tc['id'],
                         type='function',
                         function=SimpleNamespace(
                             name=tc['function']['name'],
-                            arguments=tc['function']['arguments']
+                            arguments=args_str
                         )
                     )
                     final_tool_calls.append(tool_obj)
@@ -676,8 +823,15 @@ class GokuAgent:
             if not final_tool_calls:
                 if turn == 0 or not clean_content:
                     if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
-                    elif turn == 0: yield {"type": "message", "role": "agent", "content": "_[System: Empty response]_"}
-                    else: yield {"type": "message", "role": "agent", "content": "Task complete!"}
+                    elif turn == 0: 
+                        if self.session_reacted.get(session_id):
+                            # Agent chose to react only, don't send default text
+                            break
+                        yield {"type": "message", "role": "agent", "content": "_[System: Empty response]_"}
+                    else: 
+                        if self.session_reacted.get(session_id):
+                            break
+                        yield {"type": "message", "role": "agent", "content": "Task complete!"}
                     break
                 else:
                     if "?" in clean_content or (hasattr(self, "pending_hashes") and self.pending_hashes):
@@ -685,6 +839,12 @@ class GokuAgent:
                         break
                     
                     if clean_content: yield {"type": "thought", "content": clean_content}
+                    
+                    # If we've already reacted, we're likely done and just being polite/chatty.
+                    # Don't force a tool call if we've already acknowledged the message.
+                    if self.session_reacted.get(session_id):
+                        break
+
                     loop_data["narration_retries"] = loop_data.get("narration_retries", 0) + 1
                     if loop_data["narration_retries"] >= 3:
                         yield {"type": "message", "role": "agent", "content": clean_content}
@@ -695,7 +855,13 @@ class GokuAgent:
             else:
                 loop_data["narration_retries"] = 0
                 if "count" in loop_data: loop_data["count"] = 0
-                if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
+                # We intentionally do NOT yield `clean_content` as a `message` here if tools are present for sub-agents.
+                # LLMs often output conversational filler like "Let me scan this file now..." before the JSON.
+                # We yield it as a thought instead, so it is logged but not sent to the end-user.
+                if self.is_sub_agent:
+                    if clean_content: yield {"type": "thought", "content": f"Agent pre-tool text: {clean_content}"}
+                else:
+                    if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
                 
                 # Check for questions before tools
                 if "?" in cast(Any, clean_content.strip())[-5:] and len(clean_content) < 400:
@@ -705,21 +871,52 @@ class GokuAgent:
             # Execute Tools
             for tool_call in final_tool_calls:
                 tool_name = tool_call.function.name
+                tool_args = {}
                 try:
-                    tool_args = json.loads(tool_call.function.arguments)
-                    if isinstance(tool_args, str): tool_args = json.loads(tool_args)
+                    raw_args = tool_call.function.arguments
+                    if isinstance(raw_args, dict):
+                        tool_args = raw_args
+                    elif isinstance(raw_args, str) and raw_args.strip():
+                        # Try to parse stringified JSON
+                        try:
+                            parsed = json.loads(raw_args)
+                            if isinstance(parsed, str):
+                                # Sometimes Ollama double-stringifies it
+                                tool_args = json.loads(parsed)
+                            else:
+                                tool_args = parsed
+                        except json.JSONDecodeError:
+                            # LLMs (especially Ollama) sometimes concatenate multiple JSON objects:
+                            # e.g. {"cmd":"..."} {"cmd":"..."} {"cmd":"..."}
+                            # We extract just the FIRST complete {...} block using bracket counting.
+                            raw_str: str = str(raw_args)
+                            depth = 0
+                            start = raw_str.find("{")
+                            if start != -1:
+                                for ci, ch in enumerate(raw_str[start:], start):
+                                    if ch == "{":
+                                        depth += 1
+                                    elif ch == "}":
+                                        depth -= 1
+                                        if depth == 0:
+                                            first_json = raw_str[start:ci + 1]
+                                            try:
+                                                tool_args = json.loads(first_json)
+                                                logger.debug(f"Salvaged first JSON object from concatenated args for {tool_name}")
+                                            except Exception:
+                                                logger.warning(f"Failed to salvage tool arguments, defaulting to empty: {raw_args}")
+                                            break
                 except Exception as e:
-                    logger.error(f"JSON error: {e}")
-                    self.histories[session_id].append({"role": "system", "content": f"[SYSTEM: JSON Error in {tool_name}]"})
-                    continue
-
+                    logger.warning(f"Could not parse tool arguments for {tool_name}, defaulting to empty dict. Error: {e}")
+                    tool_args = {}
                 if tool_name == "manage_tasks":
                     tasks = self.session_tasks[session_id]
                     action = tool_args.get("action")
                     if action == "add": tasks.extend(tool_args.get("tasks", []))
                     elif action == "update":
                         idx = tool_args.get("index")
-                        if isinstance(idx, int) and 0 <= idx < len(tasks): tasks[idx]["status"] = tool_args.get("status")
+                        if isinstance(idx, int) and 0 <= idx < len(tasks): 
+                            cast(Dict[str, Any], tasks[idx])["status"] = tool_args.get("status")
                     elif action == "clear": self.session_tasks[session_id] = []
                     
                     formatted_plan = self._format_plan(tasks)
@@ -731,7 +928,8 @@ class GokuAgent:
                         yield {"type": "message", "role": "agent", "content": f"Plan created: {formatted_plan}\nProceed?"}
                         return
                 else:
-                    yield {"type": "thought", "content": f"Running {tool_name}..."}
+                    # yield {"type": "thought", "content": f"Running {tool_name}..."} # Removed to stop spam
+                    yield {"type": "thought", "content": f"🔧 Working..."} # Send a single generic thought, bots can deduplicate or ignore
                     yield {"type": "tool_call", "name": tool_name, "args": tool_args}
                     
                     try:
@@ -757,9 +955,73 @@ class GokuAgent:
                                 else:
                                     # Native vision placeholder logic
                                     result = {"status": "success", "message": "Analyzing image natively..."}
+                        elif tool_name == "react_to_message":
+                            emoji = tool_args.get("emoji")
+                            if react_fn is not None and emoji:
+                                await cast(Callable[[str], Awaitable[Any]], react_fn)(emoji)
+                                self.session_reacted[session_id] = True
+                                result = {"status": "success", "message": f"Reacted with {emoji}"}
+                            else:
+                                result = {"error": "Reactions not supported on this channel or missing emoji"}
+                        elif tool_name == "learn_lesson":
+                            lesson = tool_args.get("lesson")
+                            skill_context = tool_args.get("skill_context", "general")
+                            if lesson:
+                                lesson_dir = os.path.join(os.getcwd(), "agents", skill_context, "lessons")
+                                os.makedirs(lesson_dir, exist_ok=True)
+                                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                lesson_path = os.path.join(lesson_dir, f"lesson_{timestamp}.md")
+                                with open(lesson_path, "w") as f:
+                                    f.write(f"# Lesson Learned: {timestamp}\n\n{lesson}\n")
+                                result = {"status": "success", "message": f"Lesson recorded for {skill_context}"}
+                            else:
+                                result = {"error": "Missing 'lesson' content"}
                         elif tool_name == "schedule_telegram_message":
                             from server import telegram_bot # type: ignore
                             result = await telegram_bot.schedule_telegram_message(tool_args)
+                        elif tool_name == "submit_to_audit":
+                            report = tool_args.get("report", "")
+                            from server.job_tracker import job_tracker # type: ignore
+                            job_id = f"job_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            job_tracker.create_job(job_id, "audit", {"report": report})
+                            asyncio.create_task(self.run_subagent_background("department_audit", "Review this report.", report, source, session_id))
+                            result = {"status": "success", "message": f"Report submitted to Audit. Job ID: {job_id}"}
+                        elif tool_name == "request_user_approval":
+                            audit_report = tool_args.get("audit_report", "")
+                            from server.job_tracker import job_tracker # type: ignore
+                            # In a real flow, we'd pass the actual job ID here. For now, we create a new approval job.
+                            job_id = f"approval_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            job_tracker.create_job(job_id, "implement", {"plan": audit_report})
+                            job_tracker.update_job_status(job_id, "AWAITING_APPROVAL")
+                            result = {"status": "success", "message": "Approval requested. Stopping execution until user approves."}
+                        elif tool_name == "schedule_implementation":
+                            job_id = tool_args.get("job_id", "")
+                            scheduled_time_iso = tool_args.get("scheduled_time_iso", "")
+                            from server.job_tracker import job_tracker # type: ignore
+                            success = job_tracker.schedule_job(job_id, scheduled_time_iso)
+                            if success:
+                                result = {"status": "success", "message": f"Job {job_id} successfully scheduled for {scheduled_time_iso}."}
+                            else:
+                                result = {"status": "error", "message": f"Failed to schedule job {job_id}. Verify the ID exists."}
+                        elif tool_name == "dispatch_implementation":
+                            job_id = tool_args.get("job_id", "")
+                            from server.job_tracker import job_tracker # type: ignore
+                            job = job_tracker.get_job(job_id)
+                            if job and job["status"] in ["AWAITING_APPROVAL", "SCHEDULED", "PENDING"]:
+                                job_tracker.update_job_status(job_id, "RUNNING")
+                                asyncio.create_task(self.run_subagent_background(
+                                    "department_implement", 
+                                    "Execute the approved plan.", 
+                                    str(job.get("payload", {})), 
+                                    source, 
+                                    job_id
+                                ))
+                                result = {"status": "success", "message": f"Job {job_id} dispatched to the Implementer."}
+                            else:
+                                result = {"status": "error", "message": f"Failed to dispatch job. Job {job_id} not found or not in a valid state."}
+                        elif tool_name == "complete_implementation":
+                            summary = tool_args.get("summary", "")
+                            result = {"status": "success", "message": f"Implementation marked complete: {summary[:50]}..."}
                         elif tool_name.startswith("openclaw_"):
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")
@@ -781,8 +1043,24 @@ class GokuAgent:
     async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):
         try:
             logger.info(f"Sub-agent start: @{skill_name}")
-            sub_agent = GokuAgent()
-            sub_agent.system_prompt = f"### ROLE: @{skill_name}\n{instructions}\n\n" + sub_agent.system_prompt
+            # Inject Lessons Learned if available
+            lessons_dir = os.path.join(os.getcwd(), "agents", skill_name, "lessons")
+            lessons_list: List[str] = []
+            if os.path.exists(lessons_dir):
+                all_files = os.listdir(lessons_dir)
+                sorted_files = sorted(all_files, reverse=True)
+                top_files: List[str] = sorted_files[:5] # type: ignore # Last 5 lessons
+                for f_name in top_files:
+                    if f_name.endswith(".md"):
+                        with open(os.path.join(lessons_dir, f_name), "r") as f:
+                            lessons_list.append(f"\n---\n{f.read()}")
+            
+            lessons_text = "".join(lessons_list)
+            
+            sub_agent = GokuAgent(is_sub_agent=True)
+            lesson_prompt = f"\n\n### RECENT LESSONS LEARNED:\n{lessons_text}" if lessons_text else ""
+            sub_agent.system_prompt = f"### ROLE: @{skill_name}\n{instructions}{lesson_prompt}\n\n" + sub_agent.system_prompt
+            
             report_content = f"### Report from @{skill_name}\n\n"
             gen = sub_agent.run_agent(user_intent, source=source, session_id=session_id)
             try:

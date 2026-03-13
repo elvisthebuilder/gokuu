@@ -4,7 +4,7 @@ import json
 import logging
 import subprocess
 from typing import List, Dict, Any
-from server.openclaw_ingestor import OpenClawIngestor # type: ignore
+from .openclaw_ingestor import OpenClawIngestor # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +144,25 @@ class MCPManager:
             if not raw_command:
                 return "Error: No 'command' argument provided for bash."
             
-            # Wrap command to persist directory and capture final CWD
-            # We use a subshell to execute the command, then print the CWD
-            full_command = f"cd {self.cwd} && ({raw_command}) && pwd"
+            # Determine the project root (one level up from server/)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            venv_activate = os.path.join(project_root, "venv", "bin", "activate")
+            
+            # Source venv if it exists, otherwise just fall back to normal shell
+            # We use '.' as a portable version of 'source' just in case
+            env_cmd = f". {venv_activate} && " if os.path.exists(venv_activate) else ""
+            
+            # Wrap command to persist directory, source venv, and capture final CWD
+            # We explicitly use /bin/bash to ensure the 'source' command and other bash-isms work
+            full_command = f"cd {self.cwd} && ({env_cmd}{raw_command}) && pwd"
             
             try:
-                result = subprocess.run(full_command, shell=True, capture_output=True, text=True, timeout=30.0)
+                result = subprocess.run(
+                    ["/bin/bash", "-c", full_command], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=30.0
+                )
                 
                 output = result.stdout.strip().split("\n")
                 if output:

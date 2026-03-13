@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException # type: ignore
 from pydantic import BaseModel # type: ignore
 from typing import Optional, Dict, Any, List
 import logging
+import importlib
 from dotenv import load_dotenv # type: ignore
 
 # Ensure .env is loaded from the project root
@@ -68,6 +69,8 @@ async def get_tools():
 @app.post("/call")
 async def call_tool(tool_call: ToolCall):
     """Executes a voice management tool."""
+    # Refresh import cache to detect any hot-installed libraries
+    importlib.invalidate_caches()
     # Hot-reload environment before each call to pick up changes without restart
     load_dotenv(ENV_PATH, override=True)
     
@@ -160,7 +163,7 @@ async def call_tool(tool_call: ToolCall):
             "env_exists": os.path.exists(ENV_PATH),
             "api_key_configured": bool(os.getenv("ELEVENLABS_API_KEY")),
             "current_voice_id": os.getenv("ELEVENLABS_VOICE_ID"),
-            "suggestion": "If 'api_key_configured' is False but it is in your .env, you MUST restart this process."
+            "suggestion": "Configuration is hot-reloaded before every tool call. No restart required."
         }
             
     raise HTTPException(status_code=404, detail=f"Tool {tool_call.name} not found")

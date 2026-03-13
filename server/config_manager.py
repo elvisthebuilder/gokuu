@@ -16,7 +16,8 @@ class ConfigManager:
             self.env_path = os.path.join(base_dir, ".env")
 
     def set_key(self, key: str, value: str):
-        """Update or add a key in the .env file."""
+        """Update or add a key in the .env file atomically."""
+        import tempfile
         lines = []
         if os.path.exists(self.env_path):
             with open(self.env_path, "r") as f:
@@ -34,8 +35,16 @@ class ConfigManager:
         if not updated:
             new_lines.append(f"{key}={value}\n")
             
-        with open(self.env_path, "w") as f:
-            f.writelines(new_lines)
+        # Atomic write using a temporary file
+        fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.env_path))
+        try:
+            with os.fdopen(fd, 'w') as tmp:
+                tmp.writelines(new_lines)
+            os.replace(temp_path, self.env_path)
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
             
         # Refresh environment
         os.environ[key] = value
@@ -93,11 +102,17 @@ class ConfigManager:
             "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
             "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
             "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY", ""),
+            "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
             "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
             "HF_TOKEN": os.getenv("HF_TOKEN", ""),
+            "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN", ""),
             "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             "VISION_PROVIDER": os.getenv("VISION_PROVIDER", "default"),
-            "GOKU_MODEL": os.getenv("GOKU_MODEL", "default")
+            "GOKU_MODEL": os.getenv("GOKU_MODEL", "default"),
+            "WHATSAPP_DM_POLICY": os.getenv("WHATSAPP_DM_POLICY", "allowlist"),
+            "WHATSAPP_ALLOW_FROM": os.getenv("WHATSAPP_ALLOW_FROM", ""),
+            "WHATSAPP_GROUP_POLICY": os.getenv("WHATSAPP_GROUP_POLICY", "mentions"),
+            "GOKU_OWNER_NUMBER": os.getenv("GOKU_OWNER_NUMBER", "")
         }
 
     def reset_all(self):
