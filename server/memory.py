@@ -1,6 +1,6 @@
 import os
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
+from qdrant_client import QdrantClient # type: ignore
+from qdrant_client.http import models # type: ignore
 from typing import List, Dict, Any
 import uuid
 import logging
@@ -10,8 +10,9 @@ logger = logging.getLogger(__name__)
 class VectorMemory:
     def __init__(self):
         self.url = os.getenv("QDRANT_URL", "http://localhost:6333")
-        self.client = QdrantClient(url=self.url)
+        self.client = QdrantClient(url=self.url, check_compatibility=False)
         self.collection_name = "goku_memory"
+        self.online = False
         self._ensure_collection()
 
     def _ensure_collection(self):
@@ -29,7 +30,7 @@ class VectorMemory:
             # Silence connection errors when running without Docker
             self.online = False
 
-    async def add_memory(self, text: str, metadata: Dict[str, Any] = None):
+    async def add_memory(self, text: str, metadata: Dict[str, Any] | None = None):
         """Add text to vector memory (RAG)."""
         if not hasattr(self, 'online') or not self.online:
             return

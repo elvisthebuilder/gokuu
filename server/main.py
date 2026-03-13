@@ -9,6 +9,9 @@ from fastapi.responses import FileResponse # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from dotenv import load_dotenv # type: ignore
 import logging
+import asyncio
+import json
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
@@ -19,7 +22,32 @@ logger = logging.getLogger(__name__)
 logging.getLogger("WhatsAppBot").setLevel(logging.DEBUG)
 logging.getLogger("ChannelManager").setLevel(logging.DEBUG)
 
-app = FastAPI(title="Goku Backend API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    from server.telegram_bot import start_telegram_bot # type: ignore
+    from server.whatsapp_bot import run_whatsapp_bot # type: ignore
+    
+    # 1. Start Bots
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if tg_token:
+        asyncio.create_task(start_telegram_bot(tg_token))
+        logger.info("Telegram Bot startup initiated.")
+    else:
+        logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram bot skipped.")
+        
+    loop = asyncio.get_running_loop()
+    asyncio.create_task(run_whatsapp_bot(loop))
+    logger.info("WhatsApp Bot startup initiated with main loop.")
+
+    # 2. Start DEF Pipeline Poller
+    asyncio.create_task(poll_job_tracker())
+    logger.info("JobTracker polling loop started.")
+    
+    yield
+    # Shutdown logic if any would go here
+
+app = FastAPI(title="Goku Backend API", version="2.5.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,27 +84,7 @@ async def update_config(config_data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.on_event("startup")
-async def startup_event():
-    """Start the Telegram and WhatsApp bots in the background."""
-    from server.telegram_bot import start_telegram_bot # type: ignore
-    from server.whatsapp_bot import run_whatsapp_bot # type: ignore
-    
-    tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if tg_token:
-        asyncio.create_task(start_telegram_bot(tg_token))
-        logger.info("Telegram Bot startup initiated.")
-    else:
-        logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram bot skipped.")
-        
-    # Start WhatsApp Bot (Runs neonize in a thread)
-    loop = asyncio.get_running_loop()
-    asyncio.create_task(run_whatsapp_bot(loop))
-    logger.info("WhatsApp Bot startup initiated with main loop.")
-
-    # Start DEF Pipeline Poller
-    asyncio.create_task(poll_job_tracker())
-    logger.info("JobTracker polling loop started.")
+    # Job polling loop is now started within lifespan
 
 async def poll_job_tracker():
     """Background loop to check for pending approvals and scheduled jobs."""
@@ -140,10 +148,6 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
-
 # Connection Manager for WebSockets
 class ConnectionManager:
     def __init__(self):
@@ -165,8 +169,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-import json
-import asyncio
 from server.lite_router import router # type: ignore
 from server.mcp_manager import mcp_manager # type: ignore
 from server.memory import memory # type: ignore

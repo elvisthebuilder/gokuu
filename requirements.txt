@@ -22,3 +22,4 @@ python-telegram-bot
 markitdown
 neonize
 segno
+apscheduler
