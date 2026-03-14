@@ -22,13 +22,18 @@ logging.getLogger("ChannelManager").setLevel(logging.DEBUG)
 
 load_dotenv()
 
-async def safe_startup(coro, name: str):
-    """Wrapper to catch errors during startup of background tasks."""
-    try:
-        logger.info(f"Starting {name}...")
-        await coro
-    except Exception as e:
-        logger.error(f"❌ {name} failed: {e}", exc_info=True)
+async def safe_startup(coro_fn, name: str):
+    """Wrapper to catch errors and restart failed background tasks."""
+    while True:
+        try:
+            logger.info(f"Starting {name}...")
+            # We pass a function that returns a coroutine to allow restarting
+            await coro_fn()
+            logger.warning(f"⚠️ {name} service returned early. Restarting in 10s...")
+        except Exception as e:
+            logger.error(f"❌ {name} failed: {e}", exc_info=True)
+            logger.info(f"Retrying {name} in 10s...")
+        await asyncio.sleep(10)
 
 
 async def poll_job_tracker():
@@ -88,25 +93,30 @@ async def main():
     logger.info("🐉 Goku Background Gateway Starting...")
     
     # Must import these inside the async loop to avoid event loop issues with some libraries
-    from server.telegram_bot import start_telegram_bot  # type: ignore
-    from server.whatsapp_bot import run_whatsapp_bot  # type: ignore
-    from server.config_manager import config_manager # type: ignore
+    from .telegram_bot import start_telegram_bot  # type: ignore
+    from .whatsapp_bot import run_whatsapp_bot  # type: ignore
+    from .config_manager import config_manager # type: ignore
     
     tasks = []
     
-    # 1. Telegram Bot
-    tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if tg_token:
-        tasks.append(asyncio.create_task(safe_startup(start_telegram_bot(tg_token), "Telegram Bot")))
+    # 1. Telegram Bot (Long-polling)
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if telegram_token:
+        tasks.append(safe_startup(lambda: start_telegram_bot(telegram_token), "Telegram Bot"))
     else:
         logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram skipped.")
 
-    # 2. WhatsApp Bot
+    # 2. WhatsApp Bot (LID-aware Hyper-Resilience)
     loop = asyncio.get_running_loop()
-    tasks.append(asyncio.create_task(safe_startup(run_whatsapp_bot(loop), "WhatsApp Bot")))
+    wa_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
+    if wa_linked:
+        # Note: WhatsApp bot blocking thread-safe call
+        tasks.append(safe_startup(lambda: run_whatsapp_bot(loop), "WhatsApp Bot"))
+    else:
+        logger.warning("WHATSAPP_LINKED not true. WhatsApp Bot skipped.")
     
-    # 3. JobTracker / DEF Pipeline
-    tasks.append(asyncio.create_task(safe_startup(poll_job_tracker(), "JobTracker Poller")))
+    # 3. Job Tracker Poller
+    tasks.append(safe_startup(poll_job_tracker, "Job Tracker Poller"))
     
     # Run them all concurrently forever
     logger.info("All services dispatched. Gateway is now running.")

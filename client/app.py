@@ -1139,33 +1139,10 @@ def interactive():
 
 async def interactive_loop():
     """Main async loop for the interactive session."""
-    # Start Telegram Bot if configured
-    telegram_token = config_manager.get_key("TELEGRAM_BOT_TOKEN")
-    if telegram_token:
-        try:
-            from server.telegram_bot import start_telegram_bot # type: ignore
-            # Run in background
-            bot_task = asyncio.create_task(start_telegram_bot(telegram_token))
-            rprint("[bold green]📱 Telegram bot initialization started...[/bold green]")
-        except Exception as e:
-            rprint(f"[bold red]❌ Failed to start Telegram Bot: {e}[/bold red]")
-    else:
-        rprint("[bold yellow]⚠️  TELEGRAM_BOT_TOKEN not found in .env. Telegram interface disabled.[/bold yellow]")
-
-    # Start WhatsApp Bot if linked
-    wa_linked = config_manager.get_key("WHATSAPP_LINKED") == "true"
-    if wa_linked:
-        try:
-            from server.whatsapp_bot import run_whatsapp_bot # type: ignore
-            # Pass our current running loop for thread-safe bridge
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(run_whatsapp_bot(loop))
-            rprint("[bold green]📱 WhatsApp bot connected and listening...[/bold green]")
-        except Exception as e:
-            rprint(f"[bold red]❌ Failed to start WhatsApp Bot: {e}[/bold red]")
-    else:
-        rprint("[bold yellow]⚠️  WhatsApp not linked. Use '/channels' to link.[/bold yellow]")
-
+    # Note: Telegram and WhatsApp bots are now managed by 'server/gateway.py'.
+    # Running them here would cause conflicts (e.g., WhatsApp StreamReplaced error).
+    # The CLI now focused purely on terminal interaction.
+    
     # Initialize session with history and lexer
     session = PromptSession(
         history=InMemoryHistory(),

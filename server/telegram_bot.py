@@ -240,13 +240,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def status_update(text: str):
         nonlocal status_msg
         try:
+            if text == "paused":
+                if status_msg:
+                    try:
+                        await status_msg.delete()
+                        status_msg = None
+                    except:
+                        pass
+                return
+
             if not status_msg:
                 status_msg = await update.message.reply_text(text)
             else:
                 await status_msg.edit_text(text)
         except Exception:
             # Fallback for deleted status messages
-            status_msg = await update.message.reply_text(text)
+            if text != "paused":
+                status_msg = await update.message.reply_text(text)
 
     async def send_response(text: str):
         nonlocal status_msg
@@ -282,8 +292,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if status_msg:
                         try:
                             await status_msg.edit_text(formatted, parse_mode="MarkdownV2")
-                        except Exception:
-                            await context.bot.send_message(chat_id=chat_id, text=formatted, parse_mode="MarkdownV2")
+                            # Detach status tracker so final answer isn't deleted by "paused" update
+                            status_msg = None 
+                        except Exception as e:
+                            logger.debug(f"Edit failed (msg deleted?): {e}")
+                            await update.message.reply_text(formatted, parse_mode="MarkdownV2")
+                            status_msg = None
                     else:
                         await context.bot.send_message(chat_id=chat_id, text=formatted, parse_mode="MarkdownV2")
         except Exception as e:
