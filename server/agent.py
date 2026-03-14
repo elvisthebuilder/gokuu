@@ -963,7 +963,7 @@ class GokuAgent:
                     thought_chunk = str(delta.thinking)
                     thoughts_map = getattr(self, "session_thoughts", {})
                     current_thoughts = thoughts_map.get(session_id, "")
-                    thoughts_map[session_id] = current_thoughts + thought_chunk
+                    thoughts_map[session_id] = current_thoughts + thought_chunk  # type: ignore[index]
                     yield {"type": "thought", "content": thoughts_map[session_id]}
 
                 if delta.content:
@@ -976,7 +976,7 @@ class GokuAgent:
                         scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', last_match.group(2), flags=re.IGNORECASE).strip()
                         if scrubbed_thought:
                             thoughts_map = getattr(self, "session_thoughts", {})
-                            thoughts_map[session_id] = str(scrubbed_thought)
+                            thoughts_map[session_id] = str(scrubbed_thought)  # type: ignore[index]
                             yield {"type": "thought", "content": thoughts_map[session_id]}
                 
                 if delta.tool_calls:

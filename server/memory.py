@@ -82,7 +82,7 @@ class VectorMemory:
                     )
                 ]
             )
-            log_msg = str(safe_text)[:30] if safe_text else "multimodal data"
+            log_msg = str(safe_text)[:30] if safe_text else "multimodal data"  # type: ignore[index]
             logger.debug(f"Memory: Indexed {log_msg}...")
         except Exception as e:
             logger.error(f"Memory Error (add): {e}")
