@@ -339,10 +339,17 @@ class WhatsAppBot:
                         pass
                     session_id = f"wa_{chat_jid}"
                     
-                    # Group Awareness: Prepend sender name if in a group
+                    # Sender Identification: Always enrich the message with sender context.
+                    # This allows personas to identify VIPs (e.g., the CEO's number) from their system prompt.
                     if is_group:
                         sender_name = message.Info.PushName or sender_ph or "Unknown"
-                        text = f"[{sender_name}]: {text}"
+                        text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
+                    else:
+                        # For DMs, the 'from' is implicit but we still surface the phone number
+                        # so personas can match it against VIP numbers in their instructions.
+                        sender_name = message.Info.PushName or "User"
+                        if sender_ph:
+                            text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
 
                     # 5. Delegate to Main Event Loop (Thread-Safe)
                     # We must run this on the main loop so timers/tasks in channel_broker survive
