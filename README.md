@@ -3,10 +3,12 @@
 Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
 
 ## 🚀 What's New in v2.5
-- **Channel-Specific Personalities**: Assign customized LLM system prompts (personas) to specific users or channels natively via the new `/persona` interactive command. Let Goku auto-refine your persona ideas!
-- **All-in-One Background Gateway**: A robust, headless `systemd` daemon that runs WhatsApp, Telegram, and JobTracker pollers silently in the background, independently of the Web dashboard.
-- **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) that manages complex, multi-step engineering tasks autonomously.
-- **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown formatting for WhatsApp and Telegram.
+- **Persistent Multimodal Memory**: Goku now remembers text, images, and documents (PDF/Docx) across restarts. Using Gemini Embedding 2, memories are isolated per persona, ensuring no data leakage between AI personalities.
+- **Qdrant Auto-Pilot**: The vector engine now starts automatically via Docker when needed, with persistent storage mapped to `~/.goku-agent/qdrant_data`.
+- **Channel-Specific Personalities**: Assign customized LLM system prompts (personas) to specific users or channels natively via the new `/persona` interactive command.
+- **All-in-One Background Gateway**: A robust, headless `systemd` daemon that runs WhatsApp, Telegram, and JobTracker pollers silently in the background.
+- **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) for complex engineering tasks.
+- **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown for WhatsApp and Telegram.
 - **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`).
 
 ## 🏗️ Architecture
