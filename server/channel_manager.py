@@ -120,12 +120,12 @@ class ChannelBroker:
                 await status_fn(status_text)
 
             # 2. Run Agent
-            response_text = ""
+            response_text: str = ""
+            current_buffer: str = ""
             gen = agent.run_agent(full_query, source=source, session_id=session_id, react_fn=react_fn)
             
             try:
-                while True:
-                    event = await anext(gen)
+                async for event in gen:
                     logger.debug(f"[BROKER TRACE] Agent event: {event.get('type')}")
                     
                     if event["type"] == "message":
@@ -134,28 +134,33 @@ class ChannelBroker:
                             # Clean any residual thought tags just in case
                             chunk = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', chunk, flags=re.DOTALL).strip()
                             if chunk:
-                                if response_text:
-                                    response_text += "\n\n"
-                                response_text += chunk
+                                response_text = f"{response_text}\n\n{chunk}" if response_text else chunk
+                                current_buffer = f"{current_buffer}{chunk}"
+                                
+                                # STREAMING LOGIC: Send if buffer is decent or has a newline
+                                # For WhatsApp, we buffer a bit to avoid notification spam
+                                buffer_threshold = 150 if source == "whatsapp" else 50
+                                if "\n" in current_buffer or len(current_buffer) >= buffer_threshold:
+                                    logger.info(f"[BROKER TRACE] Streaming chunk to {session_id} ({len(current_buffer)} chars)")
+                                    await send_fn(current_buffer.strip())
+                                    current_buffer = ""
                             
                     elif event["type"] == "tool_call":
                         # We intentionally DO NOT fire status updates for individual tools
                         # to prevent massive spam on the user's phone.
                         pass
                             
-            except StopAsyncIteration:
-                logger.debug(f"[BROKER TRACE] Agent execution finished for {session_id}")
+            except Exception as inner_e:
+                logger.error(f"Error during agent stream: {inner_e}")
                 pass
 
-            # 3. Final Response
-            if response_text:
-                logger.info(f"[BROKER TRACE] Sending final response to {session_id}")
-                await send_fn(response_text)
-            else:
+            # 3. Final Response (Residual buffer)
+            if current_buffer.strip():
+                logger.info(f"[BROKER TRACE] Sending residual buffer to {session_id}")
+                await send_fn(current_buffer.strip())
+            
+            if not response_text:
                 logger.warning(f"[BROKER TRACE] Agent returned empty response for {session_id}")
-                # We skip the mandatory text if a reaction was likely sent
-                # (The agent logic will handle this by returning a specific text if needed)
-                pass
 
         except Exception as e:
             logger.error(f"Fatal error running agent for {session_id}: {e}", exc_info=True)
