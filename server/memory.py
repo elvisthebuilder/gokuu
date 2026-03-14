@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 class VectorMemory:
     def __init__(self):
         self.url = os.getenv("QDRANT_URL", "http://localhost:6333")
-        self.client = QdrantClient(url=self.url, check_compatibility=False)
+        # Add a short timeout (5s) to prevent hanging if Qdrant is down
+        self.client = QdrantClient(url=self.url, check_compatibility=False, timeout=5)
         self.collection_name = "goku_memory"
         self.online = False
         self._ensure_collection()

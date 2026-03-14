@@ -8,8 +8,14 @@ logger = logging.getLogger("PersonalityManager")
 class PersonalityManager:
     """Manages custom personas mapped to channels or session IDs."""
     
-    def __init__(self, storage_dir: str = "server/personalities"):
-        self.storage_dir = storage_dir
+    def __init__(self, storage_dir: Optional[str] = None):
+        if storage_dir:
+            self.storage_dir = storage_dir
+        else:
+            # Default to server/personalities in the package root
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.storage_dir = os.path.join(base_dir, "server", "personalities")
+            
         self.mapping_file = os.path.join(self.storage_dir, "mapping.json")
         os.makedirs(self.storage_dir, exist_ok=True)
         self._ensure_mapping_file()
