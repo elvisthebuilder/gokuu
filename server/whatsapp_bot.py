@@ -403,14 +403,46 @@ class WhatsAppBot:
                             logger.error(f"WhatsApp delegate handler failed: {e}", exc_info=True)
 
                     target_loop = self.main_loop
+                    
+                    # Log thread info for debugging
+                    curr_thread = threading.current_thread().name
+                    
+                    # Check if the stored loop is usable
+                    loop_usable = False
                     if target_loop:
-                        logger.debug(f"[TRACE] Delegating to main_loop from thread {threading.current_thread().name}")
-                        asyncio.run_coroutine_threadsafe(async_delegate(), target_loop)
+                        try:
+                            if not target_loop.is_closed():
+                                loop_usable = True
+                        except Exception:
+                            pass
+
+                    if loop_usable:
+                        logger.debug(f"[TRACE] Delegating to main_loop from thread {curr_thread}")
+                        asyncio.run_coroutine_threadsafe(async_delegate(), target_loop) # type: ignore
                     else:
-                        logger.warning("[TRACE] No main_loop provided, running in new event loop.")
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(async_delegate())
+                        logger.warning(f"[TRACE] main_loop is Null or CLOSED in thread {curr_thread}. Attempting recovery...")
+                        try:
+                            # Try to find any other running loop (last resort before creating new)
+                            current_loop = None
+                            try:
+                                current_loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                # Not in a running loop thread, this is expected for the bot thread
+                                pass
+                            
+                            if current_loop and not current_loop.is_closed():
+                                logger.info(f"[TRACE] Found fallback running loop in thread {curr_thread}")
+                                asyncio.run_coroutine_threadsafe(async_delegate(), current_loop)
+                            else:
+                                # Start a one-off loop for this message if everything else fails
+                                # This is slow but prevents the "typing" hang
+                                logger.warning(f"[TRACE] No usable loop found. Spawning temporary responder loop.")
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                loop.run_until_complete(async_delegate())
+                                loop.close()
+                        except Exception as e:
+                            logger.error(f"❌ Failed all loop recovery attempts: {e}")
 
                 except Exception as e:
                     logger.error(f"Error handling WhatsApp message: {e}", exc_info=True)
