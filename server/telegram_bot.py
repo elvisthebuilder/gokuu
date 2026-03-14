@@ -387,6 +387,11 @@ async def start_telegram_bot(token: str):
         await _application.updater.start_polling()
         
         logger.info("Telegram Bot and Scheduler started successfully!")
+        
+        # Add a persistence loop so the task doesn't return (to prevent safe_startup from restarting)
+        while True:
+            await asyncio.sleep(3600)
+            
         return _application
     except Exception as e:
         logger.error(f"Failed to start Telegram Bot: {e}")

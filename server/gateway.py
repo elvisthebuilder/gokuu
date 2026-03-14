@@ -93,9 +93,9 @@ async def main():
     logger.info("🐉 Goku Background Gateway Starting...")
     
     # Must import these inside the async loop to avoid event loop issues with some libraries
-    from .telegram_bot import start_telegram_bot  # type: ignore
-    from .whatsapp_bot import run_whatsapp_bot  # type: ignore
-    from .config_manager import config_manager # type: ignore
+    from server.telegram_bot import start_telegram_bot  # type: ignore
+    from server.whatsapp_bot import run_whatsapp_bot  # type: ignore
+    from server.config_manager import config_manager # type: ignore
     
     tasks = []
     
