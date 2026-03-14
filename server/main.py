@@ -31,21 +31,25 @@ async def lifespan(app: FastAPI):
     # 1. Start Bots
     tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if tg_token:
-        asyncio.create_task(start_telegram_bot(tg_token))
-        logger.info("Telegram Bot startup initiated.")
+        asyncio.create_task(safe_startup(start_telegram_bot(tg_token), "Telegram Bot"))
     else:
         logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram bot skipped.")
         
     loop = asyncio.get_running_loop()
-    asyncio.create_task(run_whatsapp_bot(loop))
-    logger.info("WhatsApp Bot startup initiated with main loop.")
+    asyncio.create_task(safe_startup(run_whatsapp_bot(loop), "WhatsApp Bot"))
 
     # 2. Start DEF Pipeline Poller
-    asyncio.create_task(poll_job_tracker())
-    logger.info("JobTracker polling loop started.")
+    asyncio.create_task(safe_startup(poll_job_tracker(), "JobTracker Poller"))
     
     yield
-    # Shutdown logic if any would go here
+
+async def safe_startup(coro, name: str):
+    """Wrapper to catch errors during startup of background tasks."""
+    try:
+        logger.info(f"Starting {name}...")
+        await coro
+    except Exception as e:
+        logger.error(f"❌ {name} failed: {e}")
 
 app = FastAPI(title="Goku Backend API", version="2.5.0", lifespan=lifespan)
 
@@ -94,7 +98,7 @@ async def poll_job_tracker():
     
     while True:
         try:
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) # Keep it naive for SQLite but accurate
             
             # 1. Check for Pending Approvals
             approvals = job_tracker.get_jobs_by_status(["AWAITING_APPROVAL"])

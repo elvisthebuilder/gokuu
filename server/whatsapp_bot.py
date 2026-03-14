@@ -50,9 +50,29 @@ class WhatsAppBot:
         except Exception as e:
             logger.error(f"Failed to generate/display QR image: {e}")
 
+    def _check_connectivity(self) -> bool:
+        """Check if we can resolve web.whatsapp.com to prevent Go panic."""
+        import socket
+        try:
+            socket.gethostbyname("web.whatsapp.com")
+            return True
+        except socket.gaierror:
+            logger.error("🛑 WhatsApp connectivity check failed: web.whatsapp.com is unreachable (DNS error).")
+            return False
+        except Exception as e:
+            logger.error(f"⚠️ Connectivity check error: {e}")
+            return False
+
     def start(self, main_loop: Optional[asyncio.AbstractEventLoop] = None):
         """Start the WhatsApp client (blocking). Call in a thread."""
         self.main_loop = main_loop
+        
+        # 0. Pre-flight check
+        if not self._check_connectivity():
+            logger.warning("📴 Skipping WhatsApp startup due to network/DNS issues.")
+            self.is_connected = False
+            return
+
         try:
             os.makedirs("uploads", exist_ok=True)
             self.client = NewClient(self.db_path)
