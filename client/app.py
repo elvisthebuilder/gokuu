@@ -1277,6 +1277,7 @@ async def interactive_loop():
                 table.add_row("/model [name]", "Switch specific model")
                 table.add_row("/set-key [k] [v]", "Set API key or env var")
                 table.add_row("/reset", "Clear chat history")
+                table.add_row("/persona", "Manage AI personalities (Create/Assign)")
                 table.add_row("/view [path]", "Send an image to Goku (Native Vision)")
                 table.add_row("status", "Show agent status")
                 table.add_row("exit / quit", "Exit agent")
