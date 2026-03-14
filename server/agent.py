@@ -1257,7 +1257,7 @@ class GokuAgent:
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                     yield {"type": "tool_result", "name": tool_name, "content": result}
 
-        await memory.add_memory(user_text, {"type": "user_query"})
+        await memory.add_memory(user_text, images=photos, metadata={"type": "user_query", "source": source, "session_id": session_id})
 
     async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):
         try:

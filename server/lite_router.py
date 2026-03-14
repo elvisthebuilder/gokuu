@@ -5,7 +5,7 @@ import asyncio
 import copy
 import httpx # type: ignore
 import litellm # type: ignore
-from litellm import completion, acompletion # type: ignore
+from litellm import completion, acompletion, embedding, aembedding # type: ignore
 from typing import List, Dict, Any, Optional, AsyncGenerator, cast, Any as AnyType
 
 logger = logging.getLogger(__name__)
@@ -732,6 +732,54 @@ class LiteRouter:
                 raise Exception(f"Ollama service error: {str(e)}. Try restarting with: ollama serve")
             
             raise e
+
+    async def get_embedding(self, text: str, images: Optional[List[str]] = None, model: Optional[str] = None) -> List[float]:
+        """Generate a vector embedding for text and/or images.
+        Google's Gemini Embedding 2 (public preview) supports native multimodal input.
+        """
+        try:
+            available = self.available_providers
+            
+            if not model:
+                if images and "google" in available:
+                    # Native multimodal embedding from Google
+                    model = "google/multimodal-embedding-001" 
+                elif images:
+                    # Fallback or error if multiple images but no multimodal provider
+                    logger.warning("Images provided but no multimodal embedding provider available. Using text-only.")
+                    model = "google/text-embedding-004" if "google" in available else None
+                
+                if not model:
+                    if "google" in available:
+                        model = "google/text-embedding-004"
+                    elif "openai" in available:
+                        model = "openai/text-embedding-3-small"
+                    elif "ollama" in available:
+                        model = "ollama/nomic-embed-text"
+                    else:
+                        logger.warning("No embedding provider available. Using dummy vector.")
+                        return [0.1] * 1536
+
+            logger.info(f"Generating embedding using {model}...")
+            
+            # Prepare multimodal content if needed
+            input_content = [text]
+            if images and model and "multimodal" in model:
+                # Format for multimodal embedding (model-dependent, Gemini style shown)
+                # LiteLLM abstract some of this but we follow their input expectation
+                for img_path in images:
+                    if os.path.exists(img_path):
+                        input_content.append({"image_url": {"url": img_path}}) # type: ignore
+            
+            response = await aembedding(
+                model=model,
+                input=input_content
+            )
+            
+            return response.data[0]["embedding"]
+        except Exception as e:
+            logger.error(f"Failed to generate embedding (model={model}): {e}")
+            return [0.1] * 1536
 
 router = LiteRouter()
 
