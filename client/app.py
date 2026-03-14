@@ -1047,6 +1047,10 @@ async def goku_persona_menu():
             break
             
         if "Create" in choice:
+            name = await questionary.text("What should we NAME this personality? (e.g. 'mentor' — no spaces)").ask_async()
+            if not name: continue
+            name = name.replace(" ", "_").lower()
+
             method = await questionary.select(
                 "How do you want to build this?",
                 choices=[
@@ -1061,29 +1065,25 @@ async def goku_persona_menu():
                 
             prompt = ""
             if "Goku's Help" in method:
-                idea = await questionary.text("Roughly how should this personality act? (e.g. 'A strict coding mentor')").ask_async()
+                idea = await questionary.text(f"Roughly how should '{name}' act? (e.g. 'A strict coding mentor')").ask_async()
                 if not idea: continue
                 
-                with console.status("[bold cyan]🧠 Goku is crafting your persona...[/]"):
+                with console.status(f"[bold cyan]🧠 Goku is crafting the '{name}' persona...[/]"):
                     try:
-                        sys_prompt = "You are an expert prompt engineer. The user will give you a rough idea for an AI persona. Your job is to write a highly detailed, professional 'system prompt' based on their idea. JUST return the raw system prompt text."
+                        sys_prompt = f"You are an expert prompt engineer. The user wants to create an AI persona named '{name}'. The user will provide a rough idea. Your job is to write a highly detailed, professional 'system prompt' (instructing an AI how to act) that defines exactly how '{name}' should behave. JUST return the raw system prompt text."
                         response = await router.get_response(
-                            model=config_manager.get_key("GOKU_MODEL", "gemini/gemini-3-flash"),
+                            model=config_manager.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
                             messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": idea}],
                             stream=False
                         )
                         prompt = response.choices[0].message.content.strip()
-                        rprint(Panel(prompt, title="✨ Generated Prompt", border_style="cyan"))
+                        rprint(Panel(prompt, title=f"✨ Generated Prompt for {name}", border_style="cyan"))
                     except Exception as e:
                         rprint(f"[red]Failed to generate prompt: {e}[/red]")
                         continue
             else:
                 prompt = await questionary.text("Paste the EXACT system prompt:").ask_async()
                 if not prompt: continue
-            
-            name = await questionary.text("What should we NAME this personality? (e.g. 'mentor' — no spaces)").ask_async()
-            if not name: continue
-            name = name.replace(" ", "_").lower()
             
             if personality_manager.save_personality(name, prompt):
                 rprint(f"[bold green]✅ Personality '{name}' saved![/bold green]")
