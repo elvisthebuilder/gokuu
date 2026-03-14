@@ -1077,7 +1077,7 @@ async def goku_persona_menu():
                             stream=False
                         )
                         prompt = response.choices[0].message.content.strip()
-                        rprint(Panel(prompt, title=f"✨ Generated Prompt for {name}", border_style="cyan"))
+                        rprint(Panel(Markdown(prompt), title=f"✨ Generated Prompt for {name}", border_style="cyan"))
                     except Exception as e:
                         rprint(f"[red]Failed to generate prompt: {e}[/red]")
                         continue
