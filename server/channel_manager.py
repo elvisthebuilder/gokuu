@@ -26,7 +26,8 @@ class ChannelBroker:
         status_update_fn: Optional[Callable[[str], Awaitable[Any]]] = None,
         react_fn: Optional[Callable[[str], Awaitable[Any]]] = None,
         is_voice: bool = False,
-        attachment_path: Optional[str] = None
+        attachment_path: Optional[str] = None,
+        is_group: bool = False
     ):
         """Buffers incoming messages and triggers the agent after the debounce window."""
         logger.debug(f"[BROKER TRACE] handle_incoming_message: session={session_id}, source={source}, busy={session_id in self._busy_sessions}")
@@ -40,6 +41,7 @@ class ChannelBroker:
                 "send_message_fn": send_message_fn,
                 "status_update_fn": status_update_fn,
                 "react_fn": react_fn,
+                "is_group": is_group,
                 "timer": None
             }
         
@@ -103,6 +105,7 @@ class ChannelBroker:
         status_fn = req["status_update_fn"]
         react_fn = req["react_fn"]
         is_voice = req["is_voice"]
+        is_group_chat = req.get("is_group", False)
 
         logger.info(f"[BROKER TRACE] Starting agent for {session_id}. Query: {full_query[:50]}...")
 
@@ -122,7 +125,7 @@ class ChannelBroker:
             # 2. Run Agent
             response_text: str = ""
             current_buffer: str = ""
-            gen = agent.run_agent(full_query, source=source, session_id=session_id, react_fn=react_fn)
+            gen = agent.run_agent(full_query, source=source, session_id=session_id, react_fn=react_fn, is_group=is_group_chat)
             
             try:
                 async for event in gen:

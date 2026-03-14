@@ -338,6 +338,11 @@ class WhatsAppBot:
                     except:
                         pass
                     session_id = f"wa_{chat_jid}"
+                    
+                    # Group Awareness: Prepend sender name if in a group
+                    if is_group:
+                        sender_name = message.Info.PushName or sender_ph or "Unknown"
+                        text = f"[{sender_name}]: {text}"
 
                     # 5. Delegate to Main Event Loop (Thread-Safe)
                     # We must run this on the main loop so timers/tasks in channel_broker survive
@@ -396,7 +401,8 @@ class WhatsAppBot:
                                 source="whatsapp",
                                 send_message_fn=send_wa_message,
                                 status_update_fn=status_update,
-                                react_fn=react_wa
+                                react_fn=react_wa,
+                                is_group=is_group
                             )
                             logger.debug(f"[TRACE] channel_broker.handle_incoming_message completed for {session_id}")
                         except Exception as e:

@@ -235,6 +235,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. Define Callbacks for Broker
     chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    is_group = chat_type in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP]
+    
+    sender_name = "Unknown"
+    if update.effective_user:
+        sender_name = update.effective_user.full_name or update.effective_user.first_name or "Unknown"
+    
+    if is_group:
+        query = f"[{sender_name}]: {query}"
+
     status_msg = None
 
     async def status_update(text: str):
@@ -312,7 +322,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         send_message_fn=send_response,
         status_update_fn=status_update,
         is_voice=is_voice,
-        attachment_path=attachment_path
+        attachment_path=attachment_path,
+        is_group=is_group
     )
 
 async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

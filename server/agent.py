@@ -264,7 +264,7 @@ class GokuAgent:
         })
         logger.info(f"Lesson learned: {lesson}")
 
-    def _get_environment_context(self, source: str) -> str:
+    def _get_environment_context(self, source: str, is_group: bool = False) -> str:
         """Build environment-specific system prompt additions based on the interface."""
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)")
         
@@ -272,7 +272,8 @@ class GokuAgent:
             "\n━━━━━━━━━━━━━━━━━━\n"
             "ENVIRONMENT & TIME AWARENESS\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
-            f"🕒 CURRENT LOCAL TIME: {current_time}\n\n"
+            f"🕒 CURRENT LOCAL TIME: {current_time}\n"
+            f"👥 CHAT TYPE: {'Group/Channel' if is_group else 'Private Direct Message'}\n\n"
         )
 
         sandboxing = (
@@ -378,7 +379,7 @@ class GokuAgent:
             logger.error(f"External vision error ({provider}): {e}")
             return f"[Error during external vision analysis: {e}]"
 
-    async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default", react_fn: Optional[Callable[[str], Awaitable[Any]]] = None) -> AsyncGenerator[Dict[str, Any], None]:
+    async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default", react_fn: Optional[Callable[[str], Awaitable[Any]]] = None, is_group: bool = False) -> AsyncGenerator[Dict[str, Any], None]:
         """Runs the agent loop and yields thoughts, messages, and tool results.
         
         Args:
@@ -665,7 +666,7 @@ class GokuAgent:
             base_prompt = self.system_prompt
             
         # Build environment-aware system prompt with memory context
-        env_context = self._get_environment_context(source)
+        env_context = self._get_environment_context(source, is_group=is_group)
         memory_section = f"\n\n---\n🧠 **Relevant Memory ({active_persona_name}):**\n{context_str}" if context_str else ""
         full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}"
         
