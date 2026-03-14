@@ -742,16 +742,16 @@ class LiteRouter:
             
             if not model:
                 if images and "google" in available:
-                    # Native multimodal embedding from Google
-                    model = "google/multimodal-embedding-001" 
+                    # Gemini Embedding 2 — native multimodal (text, image, audio, video) preview
+                    model = "gemini/gemini-embedding-2-preview" 
                 elif images:
                     # Fallback or error if multiple images but no multimodal provider
                     logger.warning("Images provided but no multimodal embedding provider available. Using text-only.")
-                    model = "google/text-embedding-004" if "google" in available else None
+                    model = "gemini/text-embedding-004" if "google" in available else None
                 
                 if not model:
                     if "google" in available:
-                        model = "google/text-embedding-004"
+                        model = "gemini/text-embedding-004"
                     elif "openai" in available:
                         model = "openai/text-embedding-3-small"
                     elif "ollama" in available:
@@ -764,7 +764,7 @@ class LiteRouter:
             
             # Prepare multimodal content if needed
             input_content = [text]
-            if images and model and "multimodal" in model:
+            if images and model and "gemini-embedding-2" in model:
                 # Format for multimodal embedding (model-dependent, Gemini style shown)
                 # LiteLLM abstract some of this but we follow their input expectation
                 for img_path in images:
