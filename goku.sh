@@ -15,14 +15,55 @@ if [ ! -f "$VENV_PYTHON" ]; then
     VENV_PYTHON="python3"
 fi
 
+# Automation: Ensure Qdrant is running for memory persistence
+ensure_qdrant() {
+    if ! command -v docker &> /dev/null; then
+        echo "⚠️  Docker is not installed. Continuous memory will be disabled."
+        return 1
+    fi
+
+    # Ensure data directory exists
+    QDRANT_DATA="$HOME/.goku-agent/qdrant_data"
+    mkdir -p "$QDRANT_DATA"
+
+    # Check if container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
+        echo "🧠 Starting Qdrant Vector Engine..."
+        # Try to start it if it exists but is stopped
+        if docker ps -a --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
+            docker start goku-qdrant >/dev/null
+        else
+            # Create and start it
+            docker run -d \
+                --name goku-qdrant \
+                -p 6333:6333 \
+                -p 6334:6334 \
+                -v "$QDRANT_DATA:/qdrant/storage" \
+                --restart always \
+                qdrant/qdrant:latest >/dev/null
+        fi
+        
+        # Wait for Qdrant to be ready (max 5s)
+        for i in {1..5}; do
+            if curl -s http://localhost:6333/health | grep -q "ok"; then
+                echo "✅ Qdrant is ONLINE."
+                break
+            fi
+            sleep 1
+        done
+    fi
+}
+
 case "$1" in
     cli)
         shift
+        ensure_qdrant
         # Start the CLI interactive mode
         $VENV_PYTHON "$SCRIPT_DIR/client/app.py" interactive "$@"
         ;;
     web)
         shift
+        ensure_qdrant
         echo "🐉 Starting Goku Web Dashboard..."
         # Start the backend in the background
         $VENV_PYTHON "$SCRIPT_DIR/server/main.py" &
@@ -76,6 +117,7 @@ case "$1" in
         fi
         ;;
     start)
+        ensure_qdrant
         echo "🚀 Starting Goku Background Gateway..."
         sudo systemctl start goku-gateway
         echo "✅ Gateway started. Run 'goku status' to verify."
@@ -86,6 +128,7 @@ case "$1" in
         echo "✅ Gateway stopped."
         ;;
     restart)
+        ensure_qdrant
         echo "🔄 Restarting Goku Background Gateway..."
         sudo systemctl restart goku-gateway
         echo "✅ Gateway restarted."

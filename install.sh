@@ -58,6 +58,7 @@ if [ -d "$GOKU_DIR" ]; then
 else
     echo "📁 Creating installation directory at $GOKU_DIR..."
     mkdir -p "$GOKU_DIR"
+    mkdir -p "$GOKU_DIR/qdrant_data"
 fi
 
 # 3. Determine Source (Local or Remote)
