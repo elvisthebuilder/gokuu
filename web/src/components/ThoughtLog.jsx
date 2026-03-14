@@ -8,13 +8,16 @@ export const ThoughtLog = ({ thoughts, currentThought }) => {
 
     useEffect(() => {
         if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            scrollRef.current.scrollTo({
+                top: scrollRef.current.scrollHeight,
+                behavior: 'smooth'
+            });
         }
-    }, [thoughts]);
+    }, [thoughts, currentThought]);
 
     return (
-        <div className="flex-1 flex flex-col space-y-4">
-            <div className="flex items-center justify-between">
+        <div className="flex-1 flex flex-col min-h-0 p-6 space-y-4">
+            <div className="flex items-center justify-between flex-shrink-0">
                 <div className="flex items-center space-x-2">
                     <Sparkles className="w-3 h-3 text-sky-400 animate-pulse" />
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Intelligence Logs</span>
@@ -23,7 +26,7 @@ export const ThoughtLog = ({ thoughts, currentThought }) => {
 
             <div
                 ref={scrollRef}
-                className="space-y-4 pr-2"
+                className="flex-1 overflow-y-auto space-y-4 pr-2 scroll-smooth"
             >
                 <AnimatePresence initial={false}>
                     {thoughts.map((item, idx) => (

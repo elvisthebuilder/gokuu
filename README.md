@@ -3,10 +3,11 @@
 Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
 
 ## 🚀 What's New in v2.5
+- **Channel-Specific Personalities**: Assign customized LLM system prompts (personas) to specific users or channels natively via the new `/persona` interactive command. Let Goku auto-refine your persona ideas!
+- **All-in-One Background Gateway**: A robust, headless `systemd` daemon that runs WhatsApp, Telegram, and JobTracker pollers silently in the background, independently of the Web dashboard.
 - **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) that manages complex, multi-step engineering tasks autonomously.
 - **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown formatting for WhatsApp and Telegram.
 - **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`).
-- **Resilient Tool Logic**: Advanced JSON salvage mechanism to recover from malformed or concatenated LLM tool calls.
 
 ## 🏗️ Architecture
 
@@ -41,10 +42,14 @@ curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.s
 ## ⌨️ How to Use
 
 ### Global Commands
-- `goku cli`   - Start the interactive terminal agent
-- `goku web`   - Launch the high-fidelity web dashboard
-- `goku logs`  - View diagnostic logs (WhatsApp/Telegram activity)
-- `goku update` - Pull the latest version and re-install
+- `goku cli`      - Start the interactive terminal agent
+- `goku web`      - Launch the high-fidelity web dashboard
+- `goku logs`     - View diagnostic logs (WhatsApp/Telegram activity)
+- `goku update`   - Pull the latest version and re-install
+- `goku start`    - Start the background bots (Gateway)
+- `goku stop`     - Stop the background bots
+- `goku status`   - Check background bot status
+
 
 ## 🛡️ Security & Safety
 Goku is designed with a **Safety First** approach:

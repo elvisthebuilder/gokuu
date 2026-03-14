@@ -17,6 +17,7 @@ from server.lite_router import router # type: ignore
 from server.mcp_manager import mcp_manager # type: ignore
 from server.memory import memory # type: ignore
 from server.openclaw_ingestor import OpenClawIngestor # type: ignore
+from server.personality_manager import personality_manager # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ class GokuAgent:
         # Session-specific state tracking
         self.session_loop_data: Dict[str, Dict[str, Any]] = {}
         self.session_thoughts: Dict[str, str] = {}
+        self.session_persona_state: Dict[str, Dict[str, Any]] = {}  # Tracks /persona conversational state
 
         # Security state
         self.approved_hashes: set[str] = set()
@@ -391,8 +393,222 @@ class GokuAgent:
             self.histories[session_id] = []
         if session_id not in self.session_tasks:
             self.session_tasks[session_id] = []
+        if session_id not in self.session_persona_state:
+            self.session_persona_state[session_id] = {"active": False, "step": None, "data": {}}
             
         self.session_thoughts[session_id] = ""   # Reset thought buffer for this query
+
+        # --- PERSONA INTERACTIVE MENU LOGIC ---
+        p_state = self.session_persona_state[session_id]
+        clean_text = user_text.strip()
+        
+        if clean_text.lower() == "/persona" or clean_text.lower() == "/personalities":
+            p_state["active"] = True
+            p_state["step"] = "main_menu"
+            p_state["data"] = {}
+            menu = (
+                "🎭 **Goku Personality Manager**\n\n"
+                "What would you like to do?\n"
+                "1️⃣ **Create** a new personality\n"
+                "2️⃣ **List** existing personalities & mappings\n"
+                "3️⃣ **Modify** a personality\n"
+                "4️⃣ **Delete** a personality\n"
+                "0️⃣ **Cancel**\n\n"
+                "_Reply with a number (1-4) or 'cancel'_"
+            )
+            yield {"type": "message", "role": "agent", "content": menu}
+            return
+
+        if p_state["active"]:
+            step = p_state["step"]
+            lower_text = clean_text.lower()
+            
+            if lower_text in ["0", "cancel", "exit", "quit"]:
+                p_state["active"] = False
+                yield {"type": "message", "role": "agent", "content": "🚫 Persona configuration cancelled."}
+                return
+
+            # --- MAIN MENU ROUTING ---
+            if step == "main_menu":
+                if lower_text in ["1", "create", "1️⃣"]:
+                    p_state["step"] = "create_method"
+                    yield {"type": "message", "role": "agent", "content": "🛠️ **Create Personality**\n\nHow do you want to build this?\n1️⃣ **Goku's Help (Recommended)** - Just give me a rough idea, and I'll expand it into a professional prompt.\n2️⃣ **Manual** - You write the exact system prompt yourself.\n\n_Reply 1 or 2_"}
+                    return
+                elif lower_text in ["2", "list", "2️⃣"]:
+                    personas = personality_manager.list_personalities()
+                    mappings = personality_manager.get_all_mappings()
+                    if not personas:
+                        yield {"type": "message", "role": "agent", "content": "📂 You don't have any custom personalities yet. Use `/persona` and choose 'Create'."}
+                    else:
+                        msg = "📂 **Your Personalities:**\n\n"
+                        for p in personas:
+                            assigned_to = [k for k, v in mappings.items() if v == p]
+                            targets = ", ".join(assigned_to) if assigned_to else "None (Unassigned)"
+                            msg += f"• **{p}**\n  ↳ _Mapped to:_ `{targets}`\n\n"
+                        yield {"type": "message", "role": "agent", "content": msg}
+                    p_state["active"] = False
+                    return
+                elif lower_text in ["3", "modify", "3️⃣"]:
+                    personas = personality_manager.list_personalities()
+                    if not personas:
+                        yield {"type": "message", "role": "agent", "content": "📂 You don't have any custom personalities to modify."}
+                        p_state["active"] = False
+                        return
+                    p_state["step"] = "modify_select"
+                    msg = "✏️ **Modify Personality**\n\nWhich one would you like to modify?\n" + "\n".join([f"• `{p}`" for p in personas]) + "\n\n_Reply with the name._"
+                    yield {"type": "message", "role": "agent", "content": msg}
+                    return
+                elif lower_text in ["4", "delete", "4️⃣"]:
+                    personas = personality_manager.list_personalities()
+                    if not personas:
+                        yield {"type": "message", "role": "agent", "content": "📂 You don't have any custom personalities to delete."}
+                        p_state["active"] = False
+                        return
+                    p_state["step"] = "delete_select"
+                    msg = "🗑️ **Delete Personality**\n\nWhich one would you like to delete?\n" + "\n".join([f"• `{p}`" for p in personas]) + "\n\n_Reply with the name._"
+                    yield {"type": "message", "role": "agent", "content": msg}
+                    return
+                else:
+                    yield {"type": "message", "role": "agent", "content": "⚠️ Invalid option. Reply 1-4 or 'cancel'."}
+                    return
+            
+            # --- CREATE FLOW ---
+            elif step == "create_method":
+                if lower_text in ["1", "goku's help", "1️⃣"]:
+                    p_state["step"] = "create_auto_idea"
+                    yield {"type": "message", "role": "agent", "content": "🧠 **Goku's Help**\n\nTell me roughly how you want this personality to act. (e.g., 'A sarcastic pirate who writes Python' or 'A strict project manager')."}
+                    return
+                elif lower_text in ["2", "manual", "2️⃣"]:
+                    p_state["step"] = "create_manual_prompt"
+                    yield {"type": "message", "role": "agent", "content": "✍️ **Manual Entry**\n\nPlease paste the EXACT system prompt you want this personality to use."}
+                    return
+                else:
+                    yield {"type": "message", "role": "agent", "content": "⚠️ Invalid option. Reply 1 or 2."}
+                    return
+                    
+            elif step == "create_auto_idea":
+                yield {"type": "thought", "content": "Thinking about how to expand the user's idea into a robust system prompt..."}
+                try:
+                    # Ask the LLM to generate the prompt
+                    sys_prompt = "You are an expert prompt engineer. The user will give you a rough idea for an AI persona. Your job is to write a highly detailed, professional 'system prompt' (instructing an AI how to act) based on their idea. Do not include any conversational filler, JUST return the raw system prompt text."
+                    response = await router.get_response(
+                        model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-3-flash"),
+                        messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": clean_text}],
+                        stream=False
+                    )
+                    generated_prompt = response.choices[0].message.content.strip() # type: ignore
+                    p_state["data"]["prompt"] = generated_prompt
+                    p_state["step"] = "create_name"
+                    yield {"type": "message", "role": "agent", "content": f"✨ **Generated Prompt:**\n\n```\n{generated_prompt}\n```\n\nLooks good! What should we **NAME** this personality? (e.g., 'pirate', 'manager' — no spaces)"}
+                    return
+                except Exception as e:
+                    yield {"type": "message", "role": "agent", "content": f"⚠️ Failed to generate prompt: {e}. Let's cancel for now."}
+                    p_state["active"] = False
+                    return
+                    
+            elif step == "create_manual_prompt":
+                p_state["data"]["prompt"] = clean_text
+                p_state["step"] = "create_name"
+                yield {"type": "message", "role": "agent", "content": "✅ Prompt saved.\n\nWhat should we **NAME** this personality? (e.g., 'custom_dev' — no spaces)"}
+                return
+                
+            elif step == "create_name":
+                name = clean_text.replace(" ", "_").lower()
+                p_state["data"]["name"] = name
+                p_state["step"] = "create_assign"
+                yield {"type": "message", "role": "agent", "content": f"🏷️ Name set to `{name}`.\n\nFinally, which **CHANNEL** should use this personality?\n\nExamples:\n• `whatsapp` (Applies to all WhatsApp chats)\n• `telegram` (Applies to all Telegram chats)\n• `{source}:{session_id}` (Applies ONLY to this specific chat)\n• `none` (Save for later)\n\n_Reply with the channel target._"}
+                return
+                
+            elif step == "create_assign":
+                name = p_state["data"]["name"]
+                prompt = p_state["data"]["prompt"]
+                target = clean_text.lower()
+                
+                # Save the file
+                success = personality_manager.save_personality(name, prompt)
+                if not success:
+                    yield {"type": "message", "role": "agent", "content": "❌ Failed to save the personality file to disk."}
+                    p_state["active"] = False
+                    return
+                    
+                msg = f"🎉 **Success!** Personality `{name}` has been saved."
+                if target != "none":
+                    personality_manager.assign_personality(target, name)
+                    msg += f"\n🔗 And it has been mapped to: `{target}`."
+                    
+                yield {"type": "message", "role": "agent", "content": msg}
+                p_state["active"] = False
+                return
+
+            # --- MODIFY FLOW ---
+            elif step == "modify_select":
+                if clean_text not in personality_manager.list_personalities():
+                    yield {"type": "message", "role": "agent", "content": f"⚠️ Personality `{clean_text}` not found. Please type a valid name or 'cancel'."}
+                    return
+                p_state["data"]["name"] = clean_text
+                p_state["step"] = "modify_action"
+                yield {"type": "message", "role": "agent", "content": f"⚙️ Selected `{clean_text}`.\n\nWhat do you want to change?\n1️⃣ **Update Prompt** (Overwrite text)\n2️⃣ **Re-assign Channel** (Change mapping)\n\n_Reply 1 or 2_"}
+                return
+                
+            elif step == "modify_action":
+                if lower_text in ["1", "1️⃣"]:
+                    p_state["step"] = "modify_prompt"
+                    yield {"type": "message", "role": "agent", "content": "✍️ Please send the NEW system prompt for this personality."}
+                    return
+                elif lower_text in ["2", "2️⃣"]:
+                    p_state["step"] = "modify_assign"
+                    yield {"type": "message", "role": "agent", "content": f"🔗 Currently, this personality applies to: `{', '.join([k for k,v in personality_manager.get_all_mappings().items() if v == p_state['data']['name']]) or 'None'}`\n\nWhat channel should it apply to now? (e.g., 'whatsapp', 'telegram', '{source}:{session_id}')"}
+                    return
+                else:
+                    yield {"type": "message", "role": "agent", "content": "⚠️ Invalid option. Reply 1 or 2."}
+                    return
+                    
+            elif step == "modify_prompt":
+                name = p_state["data"]["name"]
+                success = personality_manager.save_personality(name, clean_text)
+                if success:
+                    yield {"type": "message", "role": "agent", "content": f"✅ The prompt for `{name}` has been successfully updated!"}
+                else:
+                    yield {"type": "message", "role": "agent", "content": "❌ Failed to update the file on disk."}
+                p_state["active"] = False
+                return
+                
+            elif step == "modify_assign":
+                name = p_state["data"]["name"]
+                target = clean_text.lower()
+                
+                # To cleanly "re-assign", we first remove old mappings for this persona, then add the new one.
+                mappings = personality_manager.get_all_mappings()
+                to_delete = [k for k, v in mappings.items() if v == name]
+                for k in to_delete:
+                    del mappings[k]
+                personality_manager._save_mappings(mappings)
+                
+                if target != "none":
+                    personality_manager.assign_personality(target, name)
+                    yield {"type": "message", "role": "agent", "content": f"✅ `{name}` is now exclusively mapped to `{target}`."}
+                else:
+                    yield {"type": "message", "role": "agent", "content": f"✅ `{name}` has been unassigned and is stored safely."}
+                p_state["active"] = False
+                return
+
+            # --- DELETE FLOW ---
+            elif step == "delete_select":
+                if clean_text not in personality_manager.list_personalities():
+                    yield {"type": "message", "role": "agent", "content": f"⚠️ Personality `{clean_text}` not found. Please type a valid name or 'cancel'."}
+                    return
+                success = personality_manager.delete_personality(clean_text)
+                if success:
+                    yield {"type": "message", "role": "agent", "content": f"🗑️ `{clean_text}` and its mappings have been deleted forever."}
+                else:
+                    yield {"type": "message", "role": "agent", "content": f"❌ Failed to delete `{clean_text}`."}
+                p_state["active"] = False
+                return
+                
+            # Failsafe
+            p_state["active"] = False
+            return
+        # --- END PERSONA LOGIC ---
 
         # Conversational Security: Check for approval of pending actions
         try:
@@ -429,9 +645,16 @@ class GokuAgent:
         else:
             context_str = json.dumps(context)
         
+        # Check for custom personality mapping
+        custom_persona = personality_manager.get_assigned_personality_for(source, session_id)
+        if custom_persona:
+            base_prompt = custom_persona
+        else:
+            base_prompt = self.system_prompt
+            
         # Build environment-aware system prompt
         env_context = self._get_environment_context(source)
-        full_system_prompt = f"{self.system_prompt}\n\n{env_context}\n\nRetrieved Context: {context_str}"
+        full_system_prompt = f"{base_prompt}\n\n{env_context}\n\nRetrieved Context: {context_str}"
         
         # Ensure we have a system message if history is empty
         if not self.histories[session_id]:
@@ -893,13 +1116,13 @@ class GokuAgent:
                             depth = 0
                             start = raw_str.find("{")
                             if start != -1:
-                                for ci, ch in enumerate(raw_str[start:], start):
+                                for ci, ch in enumerate(raw_str[start:], start): # type: ignore
                                     if ch == "{":
                                         depth += 1
                                     elif ch == "}":
                                         depth -= 1
                                         if depth == 0:
-                                            first_json = raw_str[start:ci + 1]
+                                            first_json = raw_str[start:ci + 1] # type: ignore
                                             try:
                                                 tool_args = json.loads(first_json)
                                                 logger.debug(f"Salvaged first JSON object from concatenated args for {tool_name}")

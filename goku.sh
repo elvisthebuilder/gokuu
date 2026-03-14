@@ -75,14 +75,40 @@ case "$1" in
              ./install.sh
         fi
         ;;
+    start)
+        echo "🚀 Starting Goku Background Gateway..."
+        sudo systemctl start goku-gateway
+        echo "✅ Gateway started. Run 'goku status' to verify."
+        ;;
+    stop)
+        echo "🛑 Stopping Goku Background Gateway..."
+        sudo systemctl stop goku-gateway
+        echo "✅ Gateway stopped."
+        ;;
+    restart)
+        echo "🔄 Restarting Goku Background Gateway..."
+        sudo systemctl restart goku-gateway
+        echo "✅ Gateway restarted."
+        ;;
+    status)
+        sudo systemctl status goku-gateway
+        ;;
     *)
-        echo "Usage: goku [cli|web|logs|update]"
+        echo "Usage: goku [cli|web|logs|update|start|stop|restart|status]"
         echo ""
-        echo "Commands:"
+        echo "Interfaces:"
         echo "  cli      Start the interactive terminal agent"
         echo "  web      Launch the high-fidelity web dashboard"
+        echo ""
+        echo "Operations:"
         echo "  logs     View diagnostic logs"
         echo "  update   Pull latest version and re-install"
+        echo ""
+        echo "Background Gateway (Bots & Pollers):"
+        echo "  start    Start the background gateway service"
+        echo "  stop     Stop the background gateway service"
+        echo "  restart  Restart the background gateway service"
+        echo "  status   Check if the gateway is running"
         exit 1
         ;;
 esac

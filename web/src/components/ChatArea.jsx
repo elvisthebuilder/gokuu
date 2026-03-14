@@ -10,9 +10,12 @@ export const ChatArea = ({ messages, onSendMessage, isSending }) => {
 
     useEffect(() => {
         if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            scrollRef.current.scrollTo({
+                top: scrollRef.current.scrollHeight,
+                behavior: 'smooth'
+            });
         }
-    }, [messages]);
+    }, [messages, isSending]);
 
     const handleSend = (e) => {
         e?.preventDefault();
@@ -75,7 +78,7 @@ export const ChatArea = ({ messages, onSendMessage, isSending }) => {
         <>
             <div
                 ref={scrollRef}
-                className="flex-1 overflow-y-auto px-12 py-8 space-y-8 chat-scroll scroll-smooth"
+                className="flex-1 overflow-y-auto px-8 py-4 space-y-4 chat-scroll scroll-smooth"
             >
                 <AnimatePresence initial={false}>
                     {messages.length === 0 && (
@@ -129,7 +132,7 @@ export const ChatArea = ({ messages, onSendMessage, isSending }) => {
             </div>
 
             {/* Embedded Input Bar */}
-            <div className="px-12 py-8 bg-gradient-to-t from-slate-950 via-slate-950 to-transparent">
+            <div className="px-8 pb-4 pt-2 bg-gradient-to-t from-slate-950 via-slate-950 to-transparent">
                 <form
                     onSubmit={handleSend}
                     className="relative glass-panel rounded-2xl p-1 shadow-2xl shadow-black/50 overflow-hidden group focus-within:border-sky-500/50 transition-all duration-300"
@@ -143,7 +146,7 @@ export const ChatArea = ({ messages, onSendMessage, isSending }) => {
                             disabled={isSending}
                             onChange={(e) => setInput(e.target.value)}
                             placeholder={isSending ? "Goku is calculating..." : "Transmit instructions..."}
-                            className="flex-1 bg-transparent px-5 py-4 text-sm focus:outline-none placeholder-slate-600 text-slate-200 disabled:opacity-50"
+                            className="flex-1 bg-transparent px-5 py-3 text-sm focus:outline-none placeholder-slate-600 text-slate-200 disabled:opacity-50"
                         />
                         <div className="flex items-center pr-4 space-x-2">
                             <div className="hidden sm:flex items-center space-x-1 px-2 py-1 rounded bg-slate-800 border border-slate-700">
@@ -164,7 +167,7 @@ export const ChatArea = ({ messages, onSendMessage, isSending }) => {
                         </div>
                     </div>
                 </form>
-                <div className="mt-4 flex justify-center space-x-6 text-[10px] font-bold text-slate-600 tracking-widest uppercase">
+                <div className="mt-2 flex justify-center space-x-6 text-[10px] font-bold text-slate-600 tracking-widest uppercase">
                     <div className="flex items-center space-x-2">
                         <div className="w-1 h-1 rounded-full bg-slate-600" />
                         <span>Secure Tunnel Active</span>

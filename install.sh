@@ -160,14 +160,51 @@ else
     echo "⚠️  Could not detect shell configuration file. Please manually add '$BIN_DIR' to your PATH."
 fi
 
-# 8. Final Instructions
+# 8. Setup Systemd Gateway Service
+echo "⚙️  Configuring Background Gateway Service..."
+SERVICE_FILE="/etc/systemd/system/goku-gateway.service"
+SERVICE_CONTENT="[Unit]
+Description=Goku AI Background Gateway (Telegram, WhatsApp, Job Poller)
+After=network-online.target
+
+[Service]
+User=$USER
+WorkingDirectory=$GOKU_DIR
+Environment=\"PATH=$GOKU_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin\"
+ExecStart=$GOKU_DIR/venv/bin/python3 $GOKU_DIR/server/gateway.py
+Restart=always
+RestartSec=5
+StandardOutput=append:$GOKU_DIR/goku.log
+StandardError=append:$GOKU_DIR/goku.log
+
+[Install]
+WantedBy=multi-user.target"
+
+# Ask for sudo specifically for systemd if possible, or skip if missing perms
+if command -v systemctl > /dev/null; then
+    echo "Requires sudo to install systemd service..."
+    if sudo bash -c "echo \"$SERVICE_CONTENT\" > $SERVICE_FILE"; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable goku-gateway.service
+        echo "✅ Systemd service installed. You can start it with: goku start"
+    else
+        echo "⚠️  Failed to create systemd service (sudo required). You can manually run the gateway via 'python3 server/gateway.py'."
+    fi
+else
+    echo "⚠️  systemctl not found. Background service creation skipped."
+fi
+
+# 9. Final Instructions
 echo ""
 echo "--------------------------------------------------------"
 echo "✅ Goku AI Agent installed successfully!"
 echo ""
 echo "Commands:"
-echo "  goku cli    - Launch interactive terminal agent"
-echo "  goku web    - Launch high-fidelity web dashboard"
+echo "  goku cli      - Launch interactive terminal agent"
+echo "  goku web      - Launch high-fidelity web dashboard"
+echo "  goku start    - Start the background bots (Gateway)"
+echo "  goku stop     - Stop the background bots"
+echo "  goku status   - Check background bot status"
 echo ""
 if [ -n "$SHELL_CONFIG" ]; then
     echo "🔄 Please run 'source $SHELL_CONFIG' or restart your terminal to use the 'goku' command."

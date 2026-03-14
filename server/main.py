@@ -25,31 +25,11 @@ logging.getLogger("ChannelManager").setLevel(logging.DEBUG)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
-    from server.telegram_bot import start_telegram_bot # type: ignore
-    from server.whatsapp_bot import run_whatsapp_bot # type: ignore
+    logger.info("Goku Web Backend is starting. Assuming bots are run via Gateway.")
     
-    # 1. Start Bots
-    tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if tg_token:
-        asyncio.create_task(safe_startup(start_telegram_bot(tg_token), "Telegram Bot"))
-    else:
-        logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram bot skipped.")
-        
-    loop = asyncio.get_running_loop()
-    asyncio.create_task(safe_startup(run_whatsapp_bot(loop), "WhatsApp Bot"))
-
-    # 2. Start DEF Pipeline Poller
-    asyncio.create_task(safe_startup(poll_job_tracker(), "JobTracker Poller"))
-    
+    # We yield to allow the application to run.
+    # The actual bots and poll_job_tracker are now handled by server/gateway.py
     yield
-
-async def safe_startup(coro, name: str):
-    """Wrapper to catch errors during startup of background tasks."""
-    try:
-        logger.info(f"Starting {name}...")
-        await coro
-    except Exception as e:
-        logger.error(f"❌ {name} failed: {e}")
 
 app = FastAPI(title="Goku Backend API", version="2.5.0", lifespan=lifespan)
 
@@ -88,59 +68,80 @@ async def update_config(config_data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Job polling loop is now started within lifespan
+# --- History Endpoints ---
 
-async def poll_job_tracker():
-    """Background loop to check for pending approvals and scheduled jobs."""
-    from server.job_tracker import job_tracker # type: ignore
-    from server.agent import agent # type: ignore
-    import datetime
-    
-    while True:
-        try:
-            now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) # Keep it naive for SQLite but accurate
-            
-            # 1. Check for Pending Approvals
-            approvals = job_tracker.get_jobs_by_status(["AWAITING_APPROVAL"])
-            for job in approvals:
-                # We use reminder_sent as a dirty flag to avoid spamming the user
-                if not job.get("reminder_sent"):
-                    msg = f"🔔 **Audit Department Proposal**\n\n{job.get('payload', {}).get('plan', 'No plan provided.')}\n\nDo you want to implement this now, or schedule it for later?"
-                    # For simplicity, log it or send via broadcast on WS. In a full system, you'd route this to the specific user chat via Telegram/WhatsApp.
-                    logger.info(f"[DEF] {msg}")
-                    job_tracker.set_reminder_sent(job["job_id"])
+@app.get("/sessions")
+async def get_sessions():
+    """Get all past chat sessions."""
+    from server.history_manager import history_manager # type: ignore
+    return history_manager.get_sessions()
 
-            # 2. Check for Scheduled Jobs approaching 5 minutes
-            scheduled = job_tracker.get_jobs_by_status(["SCHEDULED"])
-            for job in scheduled:
-                if job.get("scheduled_for") and not job.get("reminder_sent"):
-                    dt = datetime.datetime.fromisoformat(job["scheduled_for"])
-                    diff = dt - now
-                    if 0 <= diff.total_seconds() <= 300: # Within 5 minutes
-                        msg = f"⏳ **Reminder**: Implementation of {job['job_id']} starts in 5 minutes. Proceed or reschedule?"
-                        logger.info(f"[DEF] {msg}")
-                        job_tracker.set_reminder_sent(job["job_id"])
-                        
-            # 3. Resume PENDING or Auto-Execute SCHEDULED
-            for job in scheduled:
-                 if job.get("scheduled_for"):
-                    dt = datetime.datetime.fromisoformat(job["scheduled_for"])
-                    if now >= dt:
-                        logger.info(f"Executing scheduled job: {job['job_id']}")
-                        job_tracker.update_job_status(job["job_id"], "RUNNING")
-                        asyncio.create_task(agent.run_subagent_background(
-                            "department_implement", 
-                            "Execute the approved plan.", 
-                            str(job.get("payload", {})), 
-                            "system", 
-                            job["job_id"]
-                        ))
+@app.get("/sessions/{session_id}")
+async def get_session_messages(session_id: str):
+    """Get all messages for a specific session."""
+    from server.history_manager import history_manager # type: ignore
+    return history_manager.get_messages(session_id)
 
-        except Exception as e:
-            logger.error(f"Error in job poller: {e}")
-            
-        await asyncio.sleep(60) # Poll every 60 seconds
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session."""
+    from server.history_manager import history_manager # type: ignore
+    history_manager.delete_session(session_id)
+    return {"status": "success"}
 
+# --- Persona Endpoints ---
+
+@app.get("/personas")
+async def list_personas():
+    """List all custom personalities."""
+    from server.personality_manager import personality_manager # type: ignore
+    return personality_manager.list_personalities()
+
+@app.get("/personas/{name}")
+async def get_persona(name: str):
+    """Get content of a personality."""
+    from server.personality_manager import personality_manager # type: ignore
+    content = personality_manager.get_personality_text(name)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return {"name": name, "content": content}
+
+@app.post("/personas")
+async def save_persona(persona: dict):
+    """Save or update personality."""
+    from server.personality_manager import personality_manager # type: ignore
+    name = persona.get("name")
+    content = persona.get("content")
+    if not name or not content:
+        raise HTTPException(status_code=400, detail="Name and content required")
+    success = personality_manager.save_personality(name, content)
+    return {"status": "success" if success else "error"}
+
+@app.delete("/personas/{name}")
+async def delete_persona(name: str):
+    """Delete a personality."""
+    from server.personality_manager import personality_manager # type: ignore
+    personality_manager.delete_personality(name)
+    return {"status": "success"}
+
+# --- Skills & Tools Endpoints ---
+
+@app.get("/skills")
+async def list_skills():
+    """List all available tools/capabilities."""
+    from server.mcp_manager import mcp_manager # type: ignore
+    tools = mcp_manager.get_tools()
+    # Format tools for UI
+    formatted_skills = []
+    for tool in tools:
+        formatted_skills.append({
+            "name": tool["function"]["name"],
+            "description": tool["function"]["description"],
+            "parameters": tool["function"]["parameters"]
+        })
+    return formatted_skills
+
+    # The poll_job_tracker logic was moved to server/gateway.py
 @app.get("/")
 async def root():
     index_file = os.path.join(dist_path, "index.html")
@@ -203,12 +204,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Main Processing Block
                 from server.agent import agent # type: ignore
+                from server.history_manager import history_manager # type: ignore
                 try:
                     user_text = msg.get("content", "")
+                    session_id = msg.get("session_id", "default_web") # Frontend should provide this
                     if not user_text: continue
 
-                    async for event in agent.run_agent(user_text, source="web"):
+                    # Save user message
+                    history_manager.add_message(session_id, "user", user_text)
+
+                    full_response = []
+                    async for event in agent.run_agent(user_text, source="web", session_id=session_id):
+                        if event["type"] == "message":
+                            full_response.append(event["content"])
                         await manager.send_personal_message(json.dumps(event), websocket)
+                    
+                    # Save assistant response
+                    if full_response:
+                        history_manager.add_message(session_id, "agent", "".join(full_response))
                 except Exception as e:
                     logger.error(f"Error processing message: {str(e)}")
                     await manager.send_personal_message(json.dumps({
