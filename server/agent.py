@@ -28,8 +28,8 @@ class GokuAgent:
     def __init__(self, is_sub_agent: bool = False):
         self.is_sub_agent = is_sub_agent
         self.session_reacted: Dict[str, bool] = {}
-        self._skill_definitions = None
-        self._last_skill_refresh = 0
+        self._skill_definitions: Optional[List[Dict[str, Any]]] = None
+        self._last_skill_refresh: float = 0.0
         self.system_prompt = (
             "You are GOKU — a high-performance AI terminal agent built for precise execution, "
             "intelligent planning, and resilient problem solving.\n\n"
@@ -1318,6 +1318,6 @@ class GokuAgent:
                 logger.error(f"Failed to load skills during refresh: {e}")
                 return self._skill_definitions or []
         
-        return self._skill_definitions
+        return self._skill_definitions or []
 
 agent = GokuAgent()
