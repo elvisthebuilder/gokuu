@@ -1260,6 +1260,10 @@ async def interactive_loop():
                 await goku_channels_menu()
                 continue
 
+            elif cmd == "/persona":
+                # Fall through to run_chat(query) so agent handles the /persona wizard
+                pass
+
             elif cmd == "/config":
                 await goku_config_menu()
                 continue
