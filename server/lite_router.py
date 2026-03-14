@@ -734,48 +734,73 @@ class LiteRouter:
             raise e
 
     async def get_embedding(self, text: str, images: Optional[List[str]] = None, model: Optional[str] = None) -> List[float]:
-        """Generate a vector embedding for text and/or images.
-        Google's Gemini Embedding 2 (public preview) supports native multimodal input.
-        """
-        try:
-            available = self.available_providers
-            
-            if not model:
-                if images and "google" in available:
-                    # Gemini Embedding 2 — native multimodal (text, image, audio, video) preview
-                    model = "gemini/gemini-embedding-2-preview" 
-                elif images:
-                    # Fallback or error if multiple images but no multimodal provider
-                    logger.warning("Images provided but no multimodal embedding provider available. Using text-only.")
-                    model = "gemini/text-embedding-004" if "google" in available else None
-                
-                if not model:
-                    if "google" in available:
-                        model = "gemini/text-embedding-004"
-                    elif "openai" in available:
-                        model = "openai/text-embedding-3-small"
-                    elif "ollama" in available:
-                        model = "ollama/nomic-embed-text"
-                    else:
-                        logger.warning("No embedding provider available. Using dummy vector.")
-                        return [0.1] * 1536
+        """Generate vector embeddings for text and/or images.
 
-            logger.info(f"Generating embedding using {model}...")
-            
-            # Prepare multimodal content if needed
-            input_content = [text]
-            if images and model and "gemini-embedding-2" in model:
-                # Format for multimodal embedding (model-dependent, Gemini style shown)
-                # LiteLLM abstract some of this but we follow their input expectation
+        Multimodal path: uses the google.genai SDK with gemini-embedding-2-preview,
+        passing text + image bytes as a single Content with multiple Parts.
+        This matches the official Gemini embedding API pattern.
+
+        Text-only fallback: uses LiteLLM (gemini / openai / ollama).
+        """
+        available = self.available_providers
+        has_google = "google" in available
+
+        # --- Multimodal path (google.genai SDK) ---
+        if images and has_google:
+            try:
+                import mimetypes as _mime
+                from google import genai as _genai  # type: ignore
+                from google.genai import types as _gtypes  # type: ignore
+
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+                client = _genai.Client(api_key=api_key)
+
+                # Build a single Content with text + image parts
+                parts: list = []
+                if text:
+                    parts.append(_gtypes.Part(text=text))
                 for img_path in images:
                     if os.path.exists(img_path):
-                        input_content.append({"image_url": {"url": img_path}}) # type: ignore
-            
-            response = await aembedding(
-                model=model,
-                input=input_content
-            )
-            
+                        mime = _mime.guess_type(img_path)[0] or "image/jpeg"
+                        with open(img_path, "rb") as f:
+                            parts.append(_gtypes.Part.from_bytes(data=f.read(), mime_type=mime))
+
+                if not parts:
+                    raise ValueError("No valid embedding parts constructed")
+
+                content = _gtypes.Content(parts=parts)
+                config = _gtypes.EmbedContentConfig(output_dimensionality=1536)
+
+                # Run synchronous SDK call in a thread pool
+                result = await asyncio.get_event_loop().run_in_executor(  # type: ignore[arg-type]
+                    None,
+                    lambda: client.models.embed_content(
+                        model="gemini-embedding-2-preview",
+                        contents=[content],
+                        config=config
+                    )
+                )
+                vector = list(result.embeddings[0].values)
+                logger.info(f"Multimodal embedding generated (parts={len(parts)}, dim={len(vector)})")
+                return vector
+            except Exception as mm_err:
+                logger.warning(f"Multimodal embedding failed, falling back to text-only: {mm_err}")
+
+        # --- Text-only path (LiteLLM) ---
+        try:
+            if not model:
+                if has_google:
+                    model = "gemini/gemini-embedding-2-preview"
+                elif "openai" in available:
+                    model = "openai/text-embedding-3-small"
+                elif "ollama" in available:
+                    model = "ollama/nomic-embed-text"
+                else:
+                    logger.warning("No embedding provider available. Using dummy vector.")
+                    return [0.1] * 1536
+
+            logger.info(f"Generating text embedding via LiteLLM: {model}")
+            response = await aembedding(model=model, input=[text])
             return response.data[0]["embedding"]
         except Exception as e:
             logger.error(f"Failed to generate embedding (model={model}): {e}")
