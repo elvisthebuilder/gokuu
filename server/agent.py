@@ -635,9 +635,19 @@ class GokuAgent:
         except Exception as e:
             logger.error(f"Security state error: {e}")
 
-        # 1. Retrieval
-        # yield {"type": "thought", "content": "Searching vector memory for relevant context..."}
-        context = await memory.search_memory(user_text)
+        # 1. Resolve active persona name for memory scoping
+        # Get the NAME of the assigned persona (not its content). We use the mappings
+        # to find which named persona is active, defaulting to 'goku_default' for bare sessions.
+        from server.memory import GOKU_DEFAULT_PERSONA  # type: ignore
+        active_persona_name: str = GOKU_DEFAULT_PERSONA
+        all_mappings = personality_manager.get_all_mappings()
+        for mapped_target, mapped_persona_name in all_mappings.items():
+            if session_id == mapped_target or source == mapped_target:
+                active_persona_name = str(mapped_persona_name)
+                break
+
+        # 2. Retrieve past context from THIS persona's isolated memory
+        context = await memory.search_memory(user_text, persona_name=active_persona_name)
         
         # Include lessons learned in context
         if self._lessons_learned:
@@ -645,7 +655,7 @@ class GokuAgent:
             lessons_context = "\n".join([f"- {cast(Dict[str, str], l)['lesson']}" for l in cast(Any, learned)[-5:]])  # Last 5 lessons
             context_str = json.dumps(context) + f"\n\nRecent Lessons Learned:\n{lessons_context}"
         else:
-            context_str = json.dumps(context)
+            context_str = json.dumps(context) if context else ""
         
         # Check for custom personality mapping
         custom_persona = personality_manager.get_assigned_personality_for(source, session_id)
@@ -654,9 +664,10 @@ class GokuAgent:
         else:
             base_prompt = self.system_prompt
             
-        # Build environment-aware system prompt
+        # Build environment-aware system prompt with memory context
         env_context = self._get_environment_context(source)
-        full_system_prompt = f"{base_prompt}\n\n{env_context}\n\nRetrieved Context: {context_str}"
+        memory_section = f"\n\n---\n🧠 **Relevant Memory ({active_persona_name}):**\n{context_str}" if context_str else ""
+        full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}"
         
         # Ensure we have a system message if history is empty
         if not self.histories[session_id]:
@@ -1259,7 +1270,20 @@ class GokuAgent:
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                     yield {"type": "tool_result", "name": tool_name, "content": result}
 
-        await memory.add_memory(user_text, images=photos, metadata={"type": "user_query", "source": source, "session_id": session_id})
+        # Detect file attachments from the message text for embedding
+        # Matches patterns like [Document: /path/to/file.pdf] or [File: ...]
+        file_pattern = r'\[(?:Document|File|PDF|Doc)\s*(?:Received)?:\s*(.+?)\]'
+        file_paths = re.findall(file_pattern, user_text)  # type: ignore
+        file_to_embed = file_paths[0] if file_paths else None
+
+        # Store this interaction into the persona's isolated memory collection
+        await memory.add_memory(
+            text=user_text,
+            images=photos if photos else None,
+            file_path=file_to_embed,
+            metadata={"type": "user_query", "source": source, "session_id": session_id},
+            persona_name=active_persona_name,
+        )
 
     async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):
         try:
