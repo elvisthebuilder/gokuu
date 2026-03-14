@@ -15,7 +15,7 @@ class ChannelBroker:
         # {session_id: {full_query: str, items: [], timer: Task, source: str, send_fn: Callable}}
         self._pending_requests: Dict[str, Dict[str, Any]] = {}
         self._busy_sessions: set = set()
-        self.debounce_seconds = 5.0
+        self.debounce_seconds = 2.0
 
     async def handle_incoming_message(
         self, 
@@ -161,6 +161,11 @@ class ChannelBroker:
             logger.error(f"Fatal error running agent for {session_id}: {e}", exc_info=True)
             await send_fn(f"⚠️ Sorry, Goku hit an error: {str(e)}")
         finally:
+            if status_fn:
+                try:
+                    await status_fn("paused")
+                except:
+                    pass
             self._busy_sessions.remove(session_id)
             logger.debug(f"[BROKER TRACE] Session {session_id} marked as free")
 

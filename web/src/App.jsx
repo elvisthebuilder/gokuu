@@ -66,7 +66,8 @@ function App() {
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch('http://localhost:8000/sessions');
+      const host = window.location.hostname;
+      const res = await fetch(`http://${host}:8000/sessions`);
       const data = await res.json();
       setSessions(data);
     } catch (err) {
@@ -78,7 +79,8 @@ function App() {
     try {
       setSessionId(id);
       setIsSending(true);
-      const res = await fetch(`http://localhost:8000/sessions/${id}`);
+      const host = window.location.hostname;
+      const res = await fetch(`http://${host}:8000/sessions/${id}`);
       const data = await res.json();
       setMessages(data.map(m => ({ role: m.role, content: m.content })));
       setThoughts([]); // Clear thoughts when switching
@@ -112,7 +114,8 @@ function App() {
   };
 
   const connectWebSocket = () => {
-    const ws = new WebSocket('ws://localhost:8000/ws/chat');
+    const host = window.location.hostname;
+    const ws = new WebSocket(`ws://${host}:8000/ws/chat`);
 
     ws.onopen = () => {
       setIsConnected(true);

@@ -25,7 +25,8 @@ export const SettingsModal = ({ isOpen, onClose, onSave }) => {
 
     const fetchConfig = async () => {
         try {
-            const resp = await axios.get('http://localhost:8000/config');
+            const host = window.location.hostname;
+            const resp = await axios.get(`http://${host}:8000/config`);
             setConfig(resp.data);
         } catch (err) {
             console.error('Failed to fetch config', err);
@@ -35,7 +36,8 @@ export const SettingsModal = ({ isOpen, onClose, onSave }) => {
     const handleSave = async () => {
         setLoading(true);
         try {
-            await axios.post('http://localhost:8000/config', config);
+            const host = window.location.hostname;
+            await axios.post(`http://${host}:8000/config`, config);
             onSave?.();
             onClose();
         } catch (err) {

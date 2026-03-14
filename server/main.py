@@ -213,11 +213,20 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Save user message
                     history_manager.add_message(session_id, "user", user_text)
 
+                    # Restore history to agent if empty (server restart or context switch)
+                    if session_id not in agent.histories or not agent.histories[session_id]:
+                        logger.info(f"Restoring context for session {session_id} from database...")
+                        db_messages = history_manager.get_messages(session_id)
+                        agent.histories[session_id] = [{"role": m["role"], "content": m["content"]} for m in db_messages if m["role"] != "user" or m["content"] != user_text]
+                        # Note: we exclude the current user_text as run_agent handles it
+
                     full_response = []
+                    logger.info(f"Invoking agent for session {session_id}...")
                     async for event in agent.run_agent(user_text, source="web", session_id=session_id):
                         if event["type"] == "message":
                             full_response.append(event["content"])
                         await manager.send_personal_message(json.dumps(event), websocket)
+                    logger.info(f"Agent finished for session {session_id}. Yielded {len(full_response)} message chunks.")
                     
                     # Save assistant response
                     if full_response:

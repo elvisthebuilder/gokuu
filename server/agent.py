@@ -28,6 +28,8 @@ class GokuAgent:
     def __init__(self, is_sub_agent: bool = False):
         self.is_sub_agent = is_sub_agent
         self.session_reacted: Dict[str, bool] = {}
+        self._skill_definitions = None
+        self._last_skill_refresh = 0
         self.system_prompt = (
             "You are GOKU — a high-performance AI terminal agent built for precise execution, "
             "intelligent planning, and resilient problem solving.\n\n"
@@ -921,14 +923,8 @@ class GokuAgent:
             }
         ])
 
-        # Load skills
-        try:
-            ingestor = OpenClawIngestor(os.getcwd())
-            skill_tools = ingestor.generate_tool_definitions()
-            for st in skill_tools:
-                llm_tools.append({"type": st["type"], "function": st["function"]})
-        except Exception as e:
-            logger.error(f"Failed to load skills: {e}")
+        # Load cached or refresh skills
+        llm_tools.extend(self._get_skill_definitions())
 
         max_turns = 50 
         for turn in range(max_turns):
@@ -1301,5 +1297,27 @@ class GokuAgent:
         except Exception as e:
             logger.error(f"Sub-agent error: {e}")
             self.histories[session_id].append({"role": "system", "content": f"[ERROR]: Sub-agent @{skill_name} failed: {e}"})
+
+    def _get_skill_definitions(self) -> List[Dict[str, Any]]:
+        """Retrieve tool definitions from cache or refresh if necessary."""
+        import time
+        now = time.time()
+        
+        # Refresh cache every 10 minutes to auto-detect new MCP/Goku skills
+        if self._skill_definitions is None or (now - self._last_skill_refresh) > 600:
+            logger.info("Initializing/Refreshing skill definitions cache...")
+            tools = []
+            try:
+                ingestor = OpenClawIngestor(os.getcwd())
+                skill_tools = ingestor.generate_tool_definitions()
+                for st in skill_tools:
+                    tools.append({"type": st.get("type", "function"), "function": st["function"]})
+                self._skill_definitions = tools
+                self._last_skill_refresh = now
+            except Exception as e:
+                logger.error(f"Failed to load skills during refresh: {e}")
+                return self._skill_definitions or []
+        
+        return self._skill_definitions
 
 agent = GokuAgent()

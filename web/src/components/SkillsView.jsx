@@ -13,7 +13,8 @@ export const SkillsView = () => {
 
     const fetchSkills = async () => {
         try {
-            const res = await fetch('http://localhost:8000/skills');
+            const host = window.location.hostname;
+            const res = await fetch(`http://${host}:8000/skills`);
             const data = await res.json();
             setSkills(data);
             setIsLoading(false);

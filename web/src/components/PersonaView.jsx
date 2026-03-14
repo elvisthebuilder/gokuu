@@ -15,10 +15,11 @@ export const PersonaView = () => {
 
     const fetchPersonas = async () => {
         try {
-            const res = await fetch('http://localhost:8000/personas');
+            const host = window.location.hostname;
+            const res = await fetch(`http://${host}:8000/personas`);
             const names = await res.json();
             const detailed = await Promise.all(names.map(async name => {
-                const r = await fetch(`http://localhost:8000/personas/${name}`);
+                const r = await fetch(`http://${host}:8000/personas/${name}`);
                 return await r.json();
             }));
             setPersonas(detailed);
@@ -31,7 +32,8 @@ export const PersonaView = () => {
 
     const handleSave = async (persona) => {
         try {
-            await fetch('http://localhost:8000/personas', {
+            const host = window.location.hostname;
+            await fetch(`http://${host}:8000/personas`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(persona)
@@ -48,7 +50,8 @@ export const PersonaView = () => {
     const handleDelete = async (name) => {
         if (!confirm(`Are you sure you want to delete '${name}'?`)) return;
         try {
-            await fetch(`http://localhost:8000/personas/${name}`, { method: 'DELETE' });
+            const host = window.location.hostname;
+            await fetch(`http://${host}:8000/personas/${name}`, { method: 'DELETE' });
             fetchPersonas();
         } catch (err) {
             console.error('Failed to delete persona:', err);
