@@ -410,11 +410,11 @@ class GokuAgent:
             p_state["data"] = {}
             menu = (
                 "🎭 **Goku Personality Manager**\n\n"
-                "What would you like to do?\n"
-                "1️⃣ **Create** a new personality\n"
-                "2️⃣ **List** existing personalities & mappings\n"
-                "3️⃣ **Modify** a personality\n"
-                "4️⃣ **Delete** a personality\n"
+                "What would you like to do?\n\n"
+                "1️⃣ **Create** a new personality\n\n"
+                "2️⃣ **List** existing personalities & mappings\n\n"
+                "3️⃣ **Modify** a personality\n\n"
+                "4️⃣ **Delete** a personality\n\n"
                 "0️⃣ **Cancel**\n\n"
                 "_Reply with a number (1-4) or 'cancel'_"
             )

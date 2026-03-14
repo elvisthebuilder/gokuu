@@ -47,6 +47,7 @@ from server.memory import memory # type: ignore
 from server.lite_router import router # type: ignore
 from server.config_manager import config_manager # type: ignore
 from server.whatsapp_bot import whatsapp_bot # type: ignore
+from server.personality_manager import personality_manager # type: ignore
 
 # Prompt Toolkit for rich input
 from prompt_toolkit import PromptSession # type: ignore
@@ -1017,6 +1018,157 @@ async def reset_config():
         rprint("[dim]Reset cancelled.[/dim]")
 
 
+async def goku_persona_menu():
+    """Dedicated menu to manage AI personalities (Create/Assign/Delete)."""
+    while True:
+        rprint(Panel(
+            "[bold magenta]🎭 GOKU PERSONALITY MANAGER[/bold magenta]\n"
+            "[dim]Customize how Goku speaks and behaves.[/dim]",
+            border_style="magenta"
+        ))
+        
+        personas = personality_manager.list_personalities()
+        mappings = personality_manager.get_all_mappings()
+        
+        choices = [
+            "1️⃣  Create a new personality",
+            "2️⃣  List existing personalities & mappings",
+            "3️⃣  Modify / Edit a personality",
+            "4️⃣  Delete a personality",
+            "⬅️  Back"
+        ]
+        
+        choice = await questionary.select(
+            "What would you like to do?",
+            choices=choices
+        ).ask_async()
+        
+        if not choice or "Back" in choice:
+            break
+            
+        if "Create" in choice:
+            method = await questionary.select(
+                "How do you want to build this?",
+                choices=[
+                    "Goku's Help (Recommended) — Just give an idea, I'll write the prompt",
+                    "Manual — You write the exact system prompt",
+                    "Cancel"
+                ]
+            ).ask_async()
+            
+            if not method or "Cancel" in method:
+                continue
+                
+            prompt = ""
+            if "Goku's Help" in method:
+                idea = await questionary.text("Roughly how should this personality act? (e.g. 'A strict coding mentor')").ask_async()
+                if not idea: continue
+                
+                with console.status("[bold cyan]🧠 Goku is crafting your persona...[/]"):
+                    try:
+                        sys_prompt = "You are an expert prompt engineer. The user will give you a rough idea for an AI persona. Your job is to write a highly detailed, professional 'system prompt' based on their idea. JUST return the raw system prompt text."
+                        response = await router.get_response(
+                            model=config_manager.get_key("GOKU_MODEL", "gemini/gemini-3-flash"),
+                            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": idea}],
+                            stream=False
+                        )
+                        prompt = response.choices[0].message.content.strip()
+                        rprint(Panel(prompt, title="✨ Generated Prompt", border_style="cyan"))
+                    except Exception as e:
+                        rprint(f"[red]Failed to generate prompt: {e}[/red]")
+                        continue
+            else:
+                prompt = await questionary.text("Paste the EXACT system prompt:").ask_async()
+                if not prompt: continue
+            
+            name = await questionary.text("What should we NAME this personality? (e.g. 'mentor' — no spaces)").ask_async()
+            if not name: continue
+            name = name.replace(" ", "_").lower()
+            
+            if personality_manager.save_personality(name, prompt):
+                rprint(f"[bold green]✅ Personality '{name}' saved![/bold green]")
+                
+                # Optional assignment
+                assign = await questionary.confirm(f"Do you want to assign '{name}' to a channel now?").ask_async()
+                if assign:
+                    target = await questionary.select(
+                        "Which source/channel?",
+                        choices=[
+                            "whatsapp (All WhatsApp messages)",
+                            "telegram (All Telegram messages)",
+                            "cli:default (Only this CLI session)",
+                            "Custom ID"
+                        ]
+                    ).ask_async()
+                    
+                    if target == "Custom ID":
+                        target = await questionary.text("Enter target ID:").ask_async()
+                    
+                    if target:
+                        personality_manager.assign_personality(target.split(" ")[0], name)
+                        rprint(f"[bold green]✅ Success! Mapped to {target}.[/bold green]")
+            else:
+                rprint("[red]Failed to save personality file.[/red]")
+
+        elif "List" in choice:
+            if not personas:
+                rprint("[yellow]You don't have any custom personalities yet.[/yellow]")
+            else:
+                table = Table(title="Custom Personalities", box=None)
+                table.add_column("Name", style="bold cyan")
+                table.add_column("Mapped To", style="magenta")
+                
+                for p in personas:
+                    assigned_to = [k for k, v in mappings.items() if v == p]
+                    targets = ", ".join(assigned_to) if assigned_to else "Unassigned"
+                    table.add_row(p, targets)
+                console.print(table)
+            await questionary.text("Press Enter to continue...").ask_async()
+
+        elif "Modify" in choice:
+            if not personas:
+                rprint("[yellow]No personalities to modify.[/yellow]")
+                continue
+            
+            target_p = await questionary.select("Select personality to modify:", choices=personas + ["Cancel"]).ask_async()
+            if not target_p or target_p == "Cancel": continue
+            
+            action = await questionary.select(
+                f"Modifying '{target_p}':",
+                choices=["Update Prompt", "Re-assign Mapping", "Cancel"]
+            ).ask_async()
+            
+            if action == "Update Prompt":
+                curr = personality_manager.get_personality_text(target_p) or ""
+                new_prompt = await questionary.text("New system prompt:", default=curr).ask_async()
+                if new_prompt:
+                    personality_manager.save_personality(target_p, new_prompt)
+                    rprint("[green]✅ Updated![/green]")
+            elif action == "Re-assign Mapping":
+                t = await questionary.text("Enter new target (e.g. 'whatsapp', 'cli:default') or 'none' to clear:").ask_async()
+                if t:
+                    if t.lower() == "none":
+                        # Manually clear mapping
+                        m = personality_manager.get_all_mappings()
+                        to_del = [k for k, v in m.items() if v == target_p]
+                        for k in to_del: m.pop(k)
+                        personality_manager._save_mappings(m)
+                        rprint("[green]✅ Mapping cleared.[/green]")
+                    else:
+                        personality_manager.assign_personality(t, target_p)
+                        rprint(f"[green]✅ Mapped to {t}.[/green]")
+
+        elif "Delete" in choice:
+            if not personas:
+                rprint("[yellow]No personalities to delete.[/yellow]")
+                continue
+            target_p = await questionary.select("Select personality to DELETE:", choices=personas + ["Cancel"]).ask_async()
+            if not target_p or target_p == "Cancel": continue
+            
+            if await questionary.confirm(f"Are you sure you want to delete '{target_p}' forever?").ask_async():
+                personality_manager.delete_personality(target_p)
+                rprint("[bold green]🗑️ Deleted.[/bold green]")
+
 async def goku_config_menu():
     """Main Goku configuration center — the Jarvis control panel."""
     while True:
@@ -1261,8 +1413,8 @@ async def interactive_loop():
                 continue
 
             elif cmd == "/persona":
-                # Fall through to run_chat(query) so agent handles the /persona wizard
-                pass
+                await goku_persona_menu()
+                continue
 
             elif cmd == "/config":
                 await goku_config_menu()
