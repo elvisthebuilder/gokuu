@@ -56,8 +56,17 @@ curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.s
 ## 🛡️ Security & Safety
 Goku is designed with a **Safety First** approach:
 - **Thought Transparency**: See exactly why the agent is taking an action in real-time.
-- **Local Control**: Runs natively in your environment without external containers.
+- **Local Control**: Runs natively in your environment without external containers (except for memory).
 - **Human-in-the-Loop**: Interactive confirmation for sensitive tool executions.
+
+## 🛠️ Troubleshooting
+
+### Docker Permissions
+If you see a `permission denied` error when starting Goku, it's likely because your user doesn't have permission to manage Docker containers. You can resolve this by:
+1. Adding your user to the `docker` group: `sudo usermod -aG docker $USER`
+2. Applying the changes: `newgrp docker`
+
+Alternatively, Goku will automatically prompt for `sudo` if it detects a permission issue.
 
 ## 🤝 Contributing
 We welcome contributions! Please follow the standard fork and pull request workflow.

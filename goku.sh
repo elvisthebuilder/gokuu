@@ -26,15 +26,27 @@ ensure_qdrant() {
     QDRANT_DATA="$HOME/.goku-agent/qdrant_data"
     mkdir -p "$QDRANT_DATA"
 
+    # Check for Docker permissions
+    DOCKER_CMD="docker"
+    if ! docker ps > /dev/null 2>&1; then
+        if docker ps 2>&1 | grep -q "permission denied"; then
+            echo "🔐 Docker requires sudo permissions..."
+            DOCKER_CMD="sudo docker"
+        else
+            echo "⚠️  Docker is installed but not running. Continuous memory will be disabled."
+            return 1
+        fi
+    fi
+
     # Check if container is running
-    if ! docker ps --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
+    if ! $DOCKER_CMD ps --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
         echo "🧠 Starting Qdrant Vector Engine..."
         # Try to start it if it exists but is stopped
-        if docker ps -a --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
-            docker start goku-qdrant >/dev/null
+        if $DOCKER_CMD ps -a --format '{{.Names}}' | grep -q "^goku-qdrant$"; then
+            $DOCKER_CMD start goku-qdrant >/dev/null
         else
             # Create and start it
-            docker run -d \
+            $DOCKER_CMD run -d \
                 --name goku-qdrant \
                 -p 6333:6333 \
                 -p 6334:6334 \
