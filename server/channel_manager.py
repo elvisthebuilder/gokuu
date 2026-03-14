@@ -154,8 +154,13 @@ class ChannelBroker:
                         pass
                             
             except Exception as inner_e:
-                logger.error(f"Error during agent stream: {inner_e}")
-                pass
+                logger.error(f"Error during agent stream for {session_id}: {inner_e}", exc_info=True)
+                # Surface the error to the user so they aren't left with just a typing indicator
+                error_msg = f"⚠️ Goku ran into an issue mid-response. Please try again. (Detail: {str(inner_e)[:120]})"  # type: ignore[index]
+                try:
+                    await send_fn(error_msg)
+                except Exception:
+                    pass
 
             # 3. Final Response (Residual buffer)
             if current_buffer.strip():

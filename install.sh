@@ -45,11 +45,12 @@ fi
 
 # 2. Setup Directory
 if [ -d "$GOKU_DIR" ]; then
-    echo "♻️ Updating existing installation at $GOKU_DIR..."
-    # If it's a git repo, pull latest
+    # If it's a git repo, force-update to avoid merge conflicts from local copies
     if [ -d "$GOKU_DIR/.git" ]; then
         cd "$GOKU_DIR"
-        git pull
+        git fetch origin
+        git reset --hard origin/main
+        git clean -fd --quiet
     else
         # If it's not a git repo (e.g. from previous local copy), warn or backup?
         # For simplicity, we'll just overwrite/update
@@ -69,7 +70,9 @@ if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" == "$0" ]; then
     
     if [ -d "$GOKU_DIR/.git" ]; then
         cd "$GOKU_DIR"
-        git pull
+        git fetch origin
+        git reset --hard origin/main
+        git clean -fd --quiet
     else
         # Clean directory if it exists but is empty or not a repo (safe init)
         # But we already checked above.
