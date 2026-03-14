@@ -236,7 +236,7 @@ class LiteRouter:
         if "github" in available:
             return "github/gpt-4o"
         if "google" in available:
-            return "gemini/gemini-3-flash"
+            return "gemini/gemini-2.5-flash"
         if "groq" in available:
             return "groq/llama-3.3-70b-versatile"
         if "openrouter" in available:
@@ -318,7 +318,7 @@ class LiteRouter:
                 defaults = {
                     "openai": ["gpt-4o", "gpt-4o-mini"],
                     "anthropic": ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"],
-                    "google": ["gemini/gemini-3-flash", "gemini/gemini-3.1-flash", "gemini/gemini-3.1-pro"],
+                    "google": ["gemini/gemini-2.5-flash", "gemini/gemini-1.5-flash", "gemini/gemini-1.5-pro"],
                     "groq": ["groq/llama-3.3-70b-versatile", "groq/mixtral-8x7b-32768"],
                     "github": ["github/gpt-4o", "github/claude-3-5-sonnet"]
                 }
@@ -639,9 +639,10 @@ class LiteRouter:
                 fallbacks.append("claude-3-5-sonnet-20240620")
             if "github" in available and not model.startswith("github/"):
                 fallbacks.append("github/gpt-4o")
-            if "google" in available and not model.startswith("gemini/"):
-                fallbacks.append("gemini/gemini-3-flash")
-                fallbacks.append("gemini/gemini-3.1-flash")
+            if "google" in available:
+                # Multi-model fallbacks
+                fallbacks.append("gemini/gemini-2.5-flash")
+                fallbacks.append("gemini/gemini-1.5-flash")
             if "groq" in available and not model.startswith("groq/"):
                 fallbacks.append("groq/llama-3.3-70b-versatile")
             if "openrouter" in available and not model.startswith("openrouter/"):

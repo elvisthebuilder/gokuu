@@ -355,7 +355,7 @@ class GokuAgent:
                 img.save(buffer, format="JPEG", quality=85)
                 b64_img = base64.b64encode(buffer.getvalue()).decode('utf-8')
             
-            model = "gpt-4o" if provider == "openai" else config_mgr.get_key("GOKU_VISION_MODEL", "gemini/gemini-3-flash")
+            model = "gpt-4o" if provider == "openai" else config_mgr.get_key("GOKU_VISION_MODEL", "gemini/gemini-2.5-flash")
             
             messages = [
                 {
@@ -494,7 +494,7 @@ class GokuAgent:
                     # Ask the LLM to generate the prompt
                     sys_prompt = "You are an expert prompt engineer. The user will give you a rough idea for an AI persona. Your job is to write a highly detailed, professional 'system prompt' (instructing an AI how to act) based on their idea. Do not include any conversational filler, JUST return the raw system prompt text."
                     response = await router.get_response(
-                        model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-3-flash"),
+                        model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
                         messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": clean_text}],
                         stream=False
                     )
