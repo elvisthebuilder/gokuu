@@ -960,9 +960,11 @@ class GokuAgent:
                 delta = chunk.choices[0].delta
                 
                 if hasattr(delta, "thinking") and delta.thinking:
-                    thought = cast(str, delta.thinking)
-                    self.session_thoughts[session_id] = self.session_thoughts.get(session_id, "") + thought
-                    yield {"type": "thought", "content": self.session_thoughts[session_id]}
+                    thought_chunk = str(delta.thinking)
+                    thoughts_map = getattr(self, "session_thoughts", {})
+                    current_thoughts = thoughts_map.get(session_id, "")
+                    thoughts_map[session_id] = current_thoughts + thought_chunk
+                    yield {"type": "thought", "content": thoughts_map[session_id]}
 
                 if delta.content:
                     text_chunk = cast(str, delta.content)
@@ -971,11 +973,11 @@ class GokuAgent:
                     matches = list(re.finditer(pattern, full_content, re.DOTALL)) # type: ignore
                     if matches:
                         last_match = matches[-1]
-                        is_closed = f"</{last_match.group(1)}>" in cast(Any, full_content)[int(last_match.start()):]
                         scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', last_match.group(2), flags=re.IGNORECASE).strip()
                         if scrubbed_thought:
-                            self.session_thoughts[session_id] = scrubbed_thought
-                            yield {"type": "thought", "content": self.session_thoughts[session_id]}
+                            thoughts_map = getattr(self, "session_thoughts", {})
+                            thoughts_map[session_id] = str(scrubbed_thought)
+                            yield {"type": "thought", "content": thoughts_map[session_id]}
                 
                 if delta.tool_calls:
                     for tc_chunk in delta.tool_calls:
