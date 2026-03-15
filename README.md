@@ -43,12 +43,21 @@ graph TD
 
 ## 🛠️ Setup & Installation
 
-### One-Liner Installation
-Run the following command to install Goku globally on your system:
-
+### 1. One-Liner Installation
 ```bash
 curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.sh | bash
 ```
+
+### 2. Configuration (.env)
+After installation, Goku creates a `.env` file in the root. Configure your essential keys:
+- `GEMINI_API_KEY`: Required for intelligence and multimodal memory.
+- `TELEGRAM_BOT_TOKEN`: Your bot token from [@BotFather](https://t.me/botfather).
+- `GOKU_OWNER_NUMBER`: Your phone number (e.g., `233...`) to authorize management commands.
+- `WHATSAPP_GROUP_POLICY`: Set to `mentions` (default) or `all`.
+
+### 3. Channel Linking
+- **Telegram**: Simply start your bot after setting the token.
+- **WhatsApp**: Run `goku start`. Check the logs with `goku logs` or look in `uploads/whatsapp_qr.png` to scan the QR code with your phone.
 
 > [!NOTE]
 > Make sure `~/.local/bin` is in your `PATH`. If not, add `export PATH="$PATH:$HOME/.local/bin"` to your `.bashrc` or `.zshrc`.
@@ -59,10 +68,17 @@ curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.s
 - `goku cli`      - Start the interactive terminal agent
 - `goku web`      - Launch the high-fidelity web dashboard
 - `goku logs`     - View diagnostic logs (WhatsApp/Telegram activity)
+- `goku channel logs` - View filtered bot-specific logs
 - `goku update`   - Pull the latest version and re-install
 - `goku start`    - Start the background bots (Gateway)
 - `goku stop`     - Stop the background bots
 - `goku status`   - Check background bot status
+
+### 🤖 Intelligent Features
+- **Persona Management**: Send `/persona` in any chat to interactively create or switch Goku's personality (e.g., "Senior Dev", "Life Coach").
+- **Autonomous Scheduling**: As the "Boss," tell Goku: *"Every day at 8 AM, give a dynamic Good Morning message in this group."*
+- **Memory Recall**: Goku automatically indexes shared images and documents. Ask him: *"What was in that architecture diagram I sent yesterday?"*
+- **Departmental Flow**: For complex tasks, Goku will automatically spawn sub-agents (Health, Audit, Implement) to ensure high-quality execution.
 
 
 ## 🛡️ Security & Safety
