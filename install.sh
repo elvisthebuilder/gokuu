@@ -96,15 +96,49 @@ fi
 # 4. Virtual Environment Setup
 echo "🐍 Setting up virtual environment..."
 cd "$GOKU_DIR"
-if [ -d "venv" ]; then
-    echo "🗑️ Removing existing virtual environment..."
-    rm -rf venv
+if [ ! -d "venv" ]; then
+    echo "📁 Creating new virtual environment..."
+    $PYTHON_CMD -m venv venv
+else
+    echo "✅ Using existing virtual environment."
 fi
-$PYTHON_CMD -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
+
+# Ensure we use the venv's python/pip directly for robustness
+VENV_PIP="$GOKU_DIR/venv/bin/pip"
+VENV_PYTHON="$GOKU_DIR/venv/bin/python3"
+
+# Upgrade pip with retry
+echo "⬆️  Upgrading pip..."
+for i in {1..3}; do
+    if $VENV_PYTHON -m pip install --upgrade pip; then
+        break
+    else
+        if [ $i -eq 3 ]; then
+            echo "❌ Failed to upgrade pip after 3 attempts."
+            # We don't exit here, maybe requirements will still work
+        else
+            echo "⚠️  Pip upgrade failed. Retrying in 5s (Attempt $i/3)..."
+            sleep 5
+        fi
+    fi
+done
+
 if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt
+    echo "📦 Installing dependencies from requirements.txt..."
+    for i in {1..3}; do
+        if $VENV_PYTHON -m pip install -r requirements.txt; then
+            echo "✅ Dependencies installed successfully."
+            break
+        else
+            if [ $i -eq 3 ]; then
+                echo "❌ Failed to install dependencies after 3 attempts. Please check your internet connection."
+                exit 1
+            else
+                echo "⚠️  Dependency installation failed. Retrying in 10s (Attempt $i/3)..."
+                sleep 10
+            fi
+        fi
+    done
 else
     echo "⚠️  requirements.txt not found! Skipping pip install."
 fi
