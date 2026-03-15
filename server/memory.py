@@ -171,12 +171,25 @@ class VectorMemory:
             if expected_dim and len(vector) != expected_dim:
                 return []
 
-            results = self.client.search(
-                collection_name=collection_name,
-                query_vector=vector,
-                limit=limit
-            )
-            return [hit.payload for hit in results if hit.payload]
+            # Flexibly handle different qdrant-client versions
+            if hasattr(self.client, "search"):
+                results = self.client.search(
+                    collection_name=collection_name,
+                    query_vector=vector,
+                    limit=limit
+                )
+            elif hasattr(self.client, "query_points"):
+                res = self.client.query_points(
+                    collection_name=collection_name,
+                    query=vector,
+                    limit=limit
+                )
+                results = res.points if hasattr(res, "points") else res
+            else:
+                logger.error(f"Memory: QdrantClient object ({type(self.client)}) has no known search method.")
+                return []
+
+            return [getattr(hit, 'payload', {}) for hit in results if hasattr(hit, 'payload')]
         except Exception as e:
             logger.error(f"Memory Error (search) [{persona_name}]: {e}")
             return []

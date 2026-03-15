@@ -3,7 +3,7 @@ from server.config_manager import config_manager as config_mgr # type: ignore
 import logging
 import asyncio
 import os
-import re # type: ignore
+import re as re_ # type: ignore
 import base64 # type: ignore
 import mimetypes # type: ignore
 import datetime # type: ignore
@@ -702,12 +702,12 @@ class GokuAgent:
 
         # Parse potential image attachments for Vision models
         photo_pattern = r'\[Photo Received:\s*(.+?)\]'
-        photos = re.findall(photo_pattern, user_text) # type: ignore
+        photos = re_.findall(photo_pattern, user_text) # type: ignore
         
         if photos:
             vision_provider = config_mgr.get_key("VISION_PROVIDER", "default").lower()
             content_array: List[Dict[str, Any]] = []
-            clean_text = re.sub(photo_pattern, '', user_text).strip() # type: ignore
+            clean_text = re_.sub(photo_pattern, '', user_text).strip() # type: ignore
             
             # Keep track of file paths so LLM knows what it's looking at
             paths_text = " ".join([f"[Image File: {p}]" for p in photos])
@@ -1019,10 +1019,10 @@ class GokuAgent:
                     text_chunk = cast(str, delta.content)
                     full_content = str(full_content) + text_chunk
                     pattern = r'<(thought|think)>(.*?)(?:</\1>|$)'
-                    matches = list(re.finditer(pattern, full_content, re.DOTALL)) # type: ignore
+                    matches = list(re_.finditer(pattern, full_content, re_.DOTALL)) # type: ignore
                     if matches:
                         last_match = matches[-1]
-                        scrubbed_thought = re.sub(r'</?(thought|think)>?.*$', '', last_match.group(2), flags=re.IGNORECASE).strip()
+                        scrubbed_thought = re_.sub(r'</?(thought|think)>?.*$', '', last_match.group(2), flags=re_.IGNORECASE).strip()
                         if scrubbed_thought:
                             thoughts_map = getattr(self, "session_thoughts", {})
                             thoughts_map[session_id] = str(scrubbed_thought)  # type: ignore[index]
@@ -1082,7 +1082,7 @@ class GokuAgent:
                 msg_dict["tool_calls"] = [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in final_tool_calls]
             
             self.histories[session_id].append(msg_dict)
-            clean_content = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re.DOTALL).strip() # type: ignore
+            clean_content = re_.sub(r'<(thought|think)>.*?(</\1>|$)', '', full_content, flags=re_.DOTALL).strip() # type: ignore
             
             if self._detect_loop(session_id, clean_content, final_tool_calls):
                 yield {"type": "thought", "content": "⚠️ Loop detected - breaking."}
@@ -1185,7 +1185,7 @@ class GokuAgent:
                     owner_raw = config_mgr.get_key("GOKU_OWNER_NUMBER", "")
                     if owner_raw:
                         # Extract sender from text if available (WhatsApp format)
-                        sender_match = re.search(r'\[FROM:.*? \(\+(\d+)\)\]', user_text)
+                        sender_match = re_.search(r'\[FROM:.*? \(\+(\d+)\)\]', user_text)
                         if sender_match:
                             sender_ph = sender_match.group(1)
                             if sender_ph == "".join(filter(str.isdigit, owner_raw)):
@@ -1208,7 +1208,7 @@ class GokuAgent:
                             else:
                                 # Extract group name from prefix if available
                                 group_name = None
-                                group_match = re.search(r'\[GROUP: (.*?)\]', user_text)
+                                group_match = re_.search(r'\[GROUP: (.*?)\]', user_text)
                                 if group_match:
                                     group_name = group_match.group(1)
                                     
@@ -1363,7 +1363,7 @@ class GokuAgent:
         # Detect file attachments from the message text for embedding
         # Matches patterns like [Document: /path/to/file.pdf] or [File: ...]
         file_pattern = r'\[(?:Document|File|PDF|Doc)\s*(?:Received)?:\s*(.+?)\]'
-        file_paths = re.findall(file_pattern, user_text)  # type: ignore
+        file_paths = re_.findall(file_pattern, user_text)  # type: ignore
         file_to_embed = file_paths[0] if file_paths else None
 
         # Store this interaction into the persona's isolated memory collection

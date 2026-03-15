@@ -339,7 +339,7 @@ class WhatsAppBot:
                             receipt=ReceiptType.READ,
                         )
                     except Exception as e:
-                        logger.debug(f"[TRACE] Could not mark message as read: {e}")
+                        logger.warning(f"[TRACE] Failed to mark message {message.Info.ID} as read: {e}")
                     try:
                         # Send "typing..." indicator immediately
                         c.send_chat_presence(raw_chat, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)

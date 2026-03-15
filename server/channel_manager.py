@@ -1,7 +1,7 @@
 import logging
 import asyncio
 import os
-import re
+import re as re_
 from typing import Dict, Any, List, Optional, Callable, Awaitable
 from datetime import datetime
 from .agent import agent # type: ignore
@@ -181,7 +181,7 @@ class ChannelBroker:
                         chunk = event["content"]
                         if chunk:
                             # Clean any residual thought tags just in case
-                            chunk = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', chunk, flags=re.DOTALL).strip()
+                            chunk = re_.sub(r'<(thought|think)>.*?(</\1>|$)', '', chunk, flags=re_.DOTALL).strip()
                             if chunk:
                                 response_text = f"{response_text}\n\n{chunk}" if response_text else chunk
                                 current_buffer = f"{current_buffer}{chunk}"
