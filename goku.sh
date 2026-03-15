@@ -118,11 +118,18 @@ case "$1" in
             exit 1
         fi
 
-        # Pull latest changes
-        if git pull | grep -q "Already up to date"; then
+        # Fetch and check for changes
+        git fetch origin
+        LOCAL=$(git rev-parse HEAD)
+        REMOTE=$(git rev-parse @{u})
+        
+        if [ "$LOCAL" = "$REMOTE" ]; then
              echo "✅ Goku is already up to date!"
         else
              echo "🚀 Update found! Re-running installer..."
+             git reset --hard origin/main
+             git clean -fd --quiet --exclude=qdrant_data
+             
              # Make sure install.sh is executable
              chmod +x ./install.sh
              ./install.sh

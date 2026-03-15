@@ -50,7 +50,7 @@ if [ -d "$GOKU_DIR" ]; then
         cd "$GOKU_DIR"
         git fetch origin
         git reset --hard origin/main
-        git clean -fd --quiet
+        git clean -fd --quiet --exclude=qdrant_data
     else
         # If it's not a git repo (e.g. from previous local copy), warn or backup?
         # For simplicity, we'll just overwrite/update

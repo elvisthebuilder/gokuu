@@ -24,3 +24,4 @@ node_modules/
 Exams/
 test_file.txt
 *.db
+qdrant_data/
