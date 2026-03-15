@@ -59,6 +59,24 @@ class VectorMemory:
             logger.info(f"Memory: Created collection '{collection_name}' (dim={vector_size})")
         except Exception as e:
             logger.error(f"Memory: Failed to create collection '{collection_name}': {e}")
+    async def _get_embedding_with_retry(self, text: str, images: Optional[List[str]] = None, max_retries: int = 3) -> List[float]:
+        """Fetch embeddings with exponential backoff for network resilience."""
+        import asyncio
+        for attempt in range(max_retries):
+            try:
+                return await router.get_embedding(text, images=images)
+            except Exception as e:
+                # specifically look for connection/DNS errors (litellm or httpx)
+                e_str = str(e).lower()
+                if "connection" in e_str or "resolution" in e_str or "timeout" in e_str:
+                    wait_time = (2 ** attempt)  # 1s, 2s, 4s
+                    logger.warning(f"Memory: Embedding failed (attempt {attempt+1}/{max_retries}). Retrying in {wait_time}s... Error: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # For other errors (like invalid API key), don't bother retrying
+                    raise e
+        # Final attempt
+        return await router.get_embedding(text, images=images)
 
     async def add_memory(
         self,
@@ -89,13 +107,13 @@ class VectorMemory:
             try:
                 file_content = _extract_file_text(file_path)
                 if file_content:
-                    safe_text = f"{safe_text}\n\n[File: {os.path.basename(file_path)}]\n{file_content[:4000]}"
+                    safe_text = f"{safe_text}\n\n[File: {os.path.basename(file_path)}]\n{file_content[:4000]}"  # type: ignore[index]
             except Exception as fe:
                 logger.warning(f"Memory: Could not extract text from file {file_path}: {fe}")
 
         try:
-            # Generate embedding (multimodal if images provided)
-            vector = await router.get_embedding(safe_text, images=images)
+            # Generate embedding with retry logic for network resilience
+            vector = await self._get_embedding_with_retry(safe_text, images=images)
 
             # Ensure the persona-scoped collection exists
             await self._ensure_collection(collection_name, len(vector))
@@ -124,7 +142,7 @@ class VectorMemory:
                 ]
             )
             log_s = str(safe_text) if safe_text else "multimodal data"
-            log_s_short = log_s[:40]
+            log_s_short = log_s[:40]  # type: ignore[index]
             logger.debug(f"Memory[{persona_name}]: Indexed '{log_s_short}...'")
         except Exception as e:
             logger.error(f"Memory Error (add) [{persona_name}]: {e}")
@@ -148,7 +166,7 @@ class VectorMemory:
             return []  # No memories stored for this persona yet
 
         try:
-            vector = await router.get_embedding(query)
+            vector = await self._get_embedding_with_retry(query)
             expected_dim = self._known_collections.get(collection_name)
             if expected_dim and len(vector) != expected_dim:
                 return []

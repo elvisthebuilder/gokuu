@@ -203,6 +203,23 @@ class GokuAgent:
         self.session_loop_data.pop(session_id, None)
         self.session_thoughts.pop(session_id, None)
 
+    def _trim_history(self, session_id: str, max_messages: int = 20):
+        """Keep history within limits while preserving the system prompt."""
+        history = self.histories.get(session_id, [])
+        if len(history) <= max_messages:
+            return
+
+        # Keep the first message (System Prompt) and the last N-1 messages
+        system_msg = history[0] if history and history[0].get("role") == "system" else None
+        
+        if system_msg:
+            trimmed = [system_msg] + history[-(max_messages - 1):]
+        else:
+            trimmed = history[-max_messages:]
+            
+        self.histories[session_id] = trimmed
+        logger.debug(f"Trimmed history for {session_id} to {len(trimmed)} messages.")
+
     def _format_plan(self, tasks: List[Dict[str, str]]) -> str:
         """Always returns highly formatted plan with headers, emojis, tables."""
         if not tasks:
@@ -380,10 +397,8 @@ class GokuAgent:
             return f"[Error during external vision analysis: {e}]"
 
     async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default", react_fn: Optional[Callable[[str], Awaitable[Any]]] = None, is_group: bool = False) -> AsyncGenerator[Dict[str, Any], None]:
-        """Runs the agent loop and yields thoughts, messages, and tool results.
-        
-        Args:
-            user_text: The user's input message.
+        """Runs the agent loop and yields thoughts, messages, and tool results."""
+        self._trim_history(session_id)
             source: The interface source — 'cli', 'web', or 'telegram'.
             session_id: The ID for the conversation session (e.g. chat_id).
             react_fn: An optional asynchronous function to send a reaction to the user's message.
@@ -1263,7 +1278,11 @@ class GokuAgent:
                             asyncio.create_task(self.run_subagent_background(skill_name, skill_info.get("instructions", ""), user_intent, source, session_id))
                             result = {"status": "dispatched", "message": f"@{skill_name} is working in background."}
                         else:
-                            result = await mcp_manager.call_tool(tool_name, tool_args)
+                            try:
+                                result = await asyncio.wait_for(mcp_manager.call_tool(tool_name, tool_args), timeout=60.0)
+                            except asyncio.TimeoutError:
+                                logger.error(f"Tool timeout: {tool_name} took longer than 60s.")
+                                result = {"status": "error", "message": f"Tool '{tool_name}' timed out after 60 seconds."}
                     except Exception as e:
                         logger.error(f"Tool error: {e}")
                         result = f"Error: {e}"

@@ -73,9 +73,12 @@ class ChannelBroker:
             logger.debug(f"[BROKER TRACE] _process_after_delay waiting for {session_id}")
             await asyncio.sleep(self.debounce_seconds)
             
-            # Wait if session is busy
+            # Wait if session is busy (with 60s absolute timeout safety)
             wait_count = 0
             while session_id in self._busy_sessions:
+                if wait_count >= 120:  # 120 * 0.5s = 60s
+                    logger.warning(f"[BROKER TRACE] Deadlock protection: {session_id} has been busy for >60s. Skipping this message.")
+                    return
                 if wait_count % 10 == 0:
                     logger.debug(f"[BROKER TRACE] {session_id} is busy, waiting...")
                 await asyncio.sleep(0.5)
