@@ -101,6 +101,17 @@ case "$1" in
         # Call the logs command in app.py
         $VENV_PYTHON "$SCRIPT_DIR/client/app.py" logs "$@"
         ;;
+    channel)
+        shift
+        subcommand=$1
+        shift
+        if [ "$subcommand" == "logs" ]; then
+            $VENV_PYTHON "$SCRIPT_DIR/client/app.py" channel-logs "$@"
+        else
+            echo "❌ Unknown channel subcommand: $subcommand. Try 'goku channel logs'"
+            exit 1
+        fi
+        ;;
     update)
         shift
         echo "⬇️  Checking for updates..."

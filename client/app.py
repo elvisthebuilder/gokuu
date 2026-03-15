@@ -1239,6 +1239,40 @@ def logs(lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to
     except Exception as e:
         rprint(f"[red]Failed to read logs: {e}[/red]")
 
+@app.command(name="channel-logs")
+def channel_logs(lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show")):
+    """View WhatsApp, Telegram, and Channel Manager status logs."""
+    if not os.path.exists(LOG_FILE):
+        rprint("[yellow]No log file found yet.[/yellow]")
+        return
+    
+    rprint(Panel(f"[bold green]📱 GOKU CHANNEL ACTIVITY LOGS[/bold green] (Last {lines} matches)", border_style="blue"))
+    try:
+        # Keywords that indicate channel-related activity
+        channel_keywords = ["WhatsAppBot", "TelegramBot", "ChannelManager", "Gateway", "[DEF]"]
+        
+        matches = []
+        with open(LOG_FILE, "r") as f:
+            # For efficiency in huge logs, we could seek from end, but for simplicity:
+            all_lines = f.readlines()
+            for line in reversed(all_lines):
+                if any(kw in line for kw in channel_keywords):
+                    matches.append(line.strip())
+                if len(matches) >= lines:
+                    break
+        
+        for line in reversed(matches):
+            # Colorize based on channel
+            if "WhatsAppBot" in line: rprint(f"[green]{line}[/green]")
+            elif "TelegramBot" in line: rprint(f"[blue]{line}[/blue]")
+            elif "ChannelManager" in line: rprint(f"[magenta]{line}[/magenta]")
+            elif "ERROR" in line: rprint(f"[red]{line}[/red]")
+            elif "WARNING" in line: rprint(f"[yellow]{line}[/yellow]")
+            else: rprint(line)
+            
+    except Exception as e:
+        rprint(f"[red]Failed to read channel logs: {e}[/red]")
+
 @app.command()
 def update():
     """Update Goku to the latest version via git."""
