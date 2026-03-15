@@ -1185,7 +1185,6 @@ class GokuAgent:
                     owner_raw = config_mgr.get_key("GOKU_OWNER_NUMBER", "")
                     if owner_raw:
                         # Extract sender from text if available (WhatsApp format)
-                        import re
                         sender_match = re.search(r'\[FROM:.*? \(\+(\d+)\)\]', user_text)
                         if sender_match:
                             sender_ph = sender_match.group(1)
