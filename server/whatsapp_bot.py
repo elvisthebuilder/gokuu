@@ -342,12 +342,12 @@ class WhatsAppBot:
                     # Sender Identification: Always enrich the message with sender context.
                     # This allows personas to identify VIPs (e.g., the CEO's number) from their system prompt.
                     if is_group:
-                        sender_name = message.Info.PushName or sender_ph or "Unknown"
+                        sender_name = getattr(message.Info, "PushName", "") or sender_ph or "Unknown"
                         text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
                     else:
                         # For DMs, the 'from' is implicit but we still surface the phone number
                         # so personas can match it against VIP numbers in their instructions.
-                        sender_name = message.Info.PushName or "User"
+                        sender_name = getattr(message.Info, "PushName", "") or "User"
                         if sender_ph:
                             text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
 
