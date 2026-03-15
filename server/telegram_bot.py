@@ -243,7 +243,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_name = update.effective_user.full_name or update.effective_user.first_name or "Unknown"
     
     if is_group:
-        query = f"[{sender_name}]: {query}"
+        group_name = update.effective_chat.title or "Group"
+        query = f"[GROUP: {group_name}] [{sender_name}]: {query}"
 
     status_msg = None
 
@@ -369,6 +370,22 @@ async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(format_for_telegram(report), parse_mode="MarkdownV2")
 
+async def send_telegram_message(chat_id: str, text: str):
+    """Helper to send a message via the global application bot instance."""
+    global _application
+    if not _application or not _application.bot:
+        logger.error("Cannot send Telegram message: Bot not initialized.")
+        return
+    try:
+        from server.telegram_formatter import format_for_telegram # type: ignore
+        await _application.bot.send_message(
+            chat_id=chat_id,
+            text=format_for_telegram(text),
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send proactive Telegram message: {e}")
+
 async def start_telegram_bot(token: str):
     """Starts the Telegram bot application in the background."""
     global _application
@@ -378,6 +395,9 @@ async def start_telegram_bot(token: str):
     
     try:
         _application = ApplicationBuilder().token(token).build()
+        
+        # Register interface for proactive messaging
+        channel_broker.register_interface("telegram", send_telegram_message)
         
         _application.add_handler(CommandHandler("start", start))
         _application.add_handler(CommandHandler("ping", ping))

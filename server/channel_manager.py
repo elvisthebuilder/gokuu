@@ -16,6 +16,49 @@ class ChannelBroker:
         self._pending_requests: Dict[str, Dict[str, Any]] = {}
         self._busy_sessions: set = set()
         self.debounce_seconds = 2.0
+        # {source_name: send_message_fn} - Used for proactive messaging
+        self._interfaces: Dict[str, Callable[[str, str], Awaitable[Any]]] = {}
+
+    def register_interface(self, source: str, send_fn: Callable[[str, str], Awaitable[Any]]):
+        """Register a bot's sending capability. send_fn takes (session_id, text)."""
+        self._interfaces[source] = send_fn
+        logger.info(f"Registered interface for {source}")
+
+    async def trigger_autonomous_agent(self, source: str, session_id: str, prompt: str, group_name: Optional[str] = None):
+        """Trigger the agent proactively (without an incoming message)."""
+        if source not in self._interfaces:
+            logger.error(f"Cannot trigger autonomous agent for {source}: No interface registered.")
+            return
+
+        # Prepend group context if available
+        if group_name:
+            prompt = f"[GROUP: {group_name}] {prompt}"
+        
+        send_fn = self._interfaces[source]
+        
+        # We wrap the send_fn to match the (text) signature expected by _run_agent_for_session
+        async def wrapped_send(text: str):
+            await send_fn(session_id, text)
+
+        req = {
+            "full_query": prompt,
+            "source": source,
+            "send_message_fn": wrapped_send,
+            "status_update_fn": None,
+            "react_fn": None,
+            "is_group": True, # Scheduled tasks are usually group-centric
+            "attachments": []
+        }
+        
+        # Wait if session is busy
+        wait_count = 0
+        while session_id in self._busy_sessions:
+            if wait_count >= 120: return
+            await asyncio.sleep(0.5)
+            wait_count += 1
+
+        logger.info(f"[BROKER] Triggering autonomous agent for {source}:{session_id}")
+        await self._run_agent_for_session(session_id, req)
 
     async def handle_incoming_message(
         self, 

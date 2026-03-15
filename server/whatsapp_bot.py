@@ -2,7 +2,7 @@ import logging
 import os
 import asyncio
 import threading
-from typing import Optional
+from typing import Optional, Dict, Any
 from neonize.client import NewClient # type: ignore
 from neonize.events import MessageEv, ConnectedEv # type: ignore
 from neonize.utils.enum import ChatPresence, ChatPresenceMedia, ReceiptType # type: ignore
@@ -24,6 +24,7 @@ class WhatsAppBot:
         # Path to store credentials (relative to working dir)
         self.db_path = os.path.join("server", "whatsapp_session.db")
         self.bot_lid_user = ""
+        self._group_info_cache: Dict[str, str] = {} # {jid: name}
 
     def _qr_callback(self, client: NewClient, qr: bytes):
         """Called when a new QR code is generated. Renders inline + saves to disk."""
@@ -80,6 +81,13 @@ class WhatsAppBot:
 
             # Register the QR callback using the correct Event API
             client.event.qr(self._qr_callback)
+
+            # Register interface for proactive messaging
+            async def send_wa_interface(session_id: str, text: str):
+                chat_jid = session_id.replace("wa_", "")
+                await self.send_message_direct(chat_jid, text)
+
+            channel_broker.register_interface("whatsapp", send_wa_interface)
 
             # Register connected event
             @client.event(ConnectedEv)
@@ -342,8 +350,20 @@ class WhatsAppBot:
                     # Sender Identification: Always enrich the message with sender context.
                     # This allows personas to identify VIPs (e.g., the CEO's number) from their system prompt.
                     if is_group:
+                        # Fetch group name
+                        group_name = self._group_info_cache.get(chat_jid, "")
+                        if not group_name:
+                            try:
+                                g_info = c.get_group_info(raw_chat)
+                                if g_info and g_info.GroupName:
+                                    group_name = g_info.GroupName
+                                    self._group_info_cache[chat_jid] = group_name
+                            except Exception as e:
+                                logger.debug(f"[TRACE] Could not fetch group info for {chat_jid}: {e}")
+                        
+                        group_prefix = f"[GROUP: {group_name}] " if group_name else ""
                         sender_name = getattr(message.Info, "PushName", "") or sender_ph or "Unknown"
-                        text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
+                        text = f"{group_prefix}[FROM: {sender_name} (+{sender_ph})]: {text}"
                     else:
                         # For DMs, the 'from' is implicit but we still surface the phone number
                         # so personas can match it against VIP numbers in their instructions.
@@ -480,6 +500,25 @@ class WhatsAppBot:
 
         except Exception as e:
             logger.error(f"Failed to start WhatsApp: {e}")
+
+    async def send_message_direct(self, chat_jid: str, text: str):
+        """Send a message directly to a JID without an incoming message context."""
+        if not self.client or not self.is_connected:
+            logger.error(f"Cannot send message to {chat_jid}: WhatsApp not connected.")
+            return
+        
+        try:
+            from server.whatsapp_formatter import format_for_whatsapp # type: ignore
+            from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as WAMessage # type: ignore
+            from neonize.utils import JID # type: ignore
+
+            formatted_text = format_for_whatsapp(text)
+            # Ensure JID is an object if needed, neonize.client.send_message usually takes JID or string
+            # We'll use the raw string if it's already a full JID
+            self.client.send_message(chat_jid, WAMessage(conversation=formatted_text))
+            logger.info(f"Proactive WA message sent to {chat_jid}")
+        except Exception as e:
+            logger.error(f"Failed to send direct WhatsApp message: {e}")
 
     def logout(self):
         """Disconnect and delete the session database."""

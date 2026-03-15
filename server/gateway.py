@@ -115,7 +115,14 @@ async def main():
     else:
         logger.warning("WHATSAPP_LINKED not true. WhatsApp Bot skipped.")
     
-    # 3. Job Tracker Poller
+    # 3. Scheduler Manager (Autonomous Tasks)
+    from server.scheduler_manager import scheduler_manager # type: ignore
+    async def run_scheduler():
+        scheduler_manager.start()
+        while True: await asyncio.sleep(3600)
+    tasks.append(safe_startup(run_scheduler, "Scheduler Manager"))
+    
+    # 4. Job Tracker Poller
     tasks.append(safe_startup(poll_job_tracker, "Job Tracker Poller"))
     
     # Run them all concurrently forever

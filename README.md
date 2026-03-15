@@ -3,13 +3,25 @@
 Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
 
 ## 🚀 What's New in v2.5
+- **Autonomous Group Tasks & Scheduling**: Goku can now execute recurring tasks (e.g., daily greetings, status reminders) in groups. Triggered by the new `manage_schedules` tool, exclusive to the **Owner**.
+- **Contextual Group Awareness**: Goku now explicitly identifies and names the group he is interacting with across WhatsApp and Telegram, enabling more personalized and context-aware responses.
 - **Persistent Multimodal Memory**: Goku now remembers text, images, and documents (PDF/Docx) across restarts. Using Gemini Embedding 2, memories are isolated per persona, ensuring no data leakage between AI personalities.
 - **Qdrant Auto-Pilot**: The vector engine now starts automatically via Docker when needed, with persistent storage mapped to `~/.goku-agent/qdrant_data`.
 - **Channel-Specific Personalities**: Assign customized LLM system prompts (personas) to specific users or channels natively via the new `/persona` interactive command.
 - **All-in-One Background Gateway**: A robust, headless `systemd` daemon that runs WhatsApp, Telegram, and JobTracker pollers silently in the background.
 - **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) for complex engineering tasks.
 - **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown for WhatsApp and Telegram.
-- **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`).
+- **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`) and specialized `goku channel logs` for bot activity.
+
+## 👔 Professional Guidelines for Users
+
+To get the most out of Goku v2.5, follow these professional communication standards:
+
+1. **Be Explicit with Goals**: When scheduling autonomous tasks, provide clear instructions. Instead of "Say hi," use "Every morning at 8 AM, provide a brief, professional greeting and ask the team for their top three priorities."
+2. **Utilize Context**: Mention specific folders or project names. Goku uses a vector memory system; referencing keywords helps him retrieve the right implementation plans.
+3. **Confirm sensitive plans**: While Goku is autonomous, use the `manage_tasks` and `request_user_approval` tools to review complex changes before final implementation.
+4. **Persona Alignment**: Switch to the right persona for the task (e.g., use a "Senior Architect" persona for code reviews and a "Project Manager" persona for scheduling).
+5. **Security First**: If scheduling tasks, ensure you are communicating from your registered **Owner** number. Goku will reject management commands from unauthorized users.
 
 ## 🏗️ Architecture
 

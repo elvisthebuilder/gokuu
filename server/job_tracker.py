@@ -25,6 +25,7 @@ class JobTracker:
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id TEXT PRIMARY KEY,
                 department TEXT NOT NULL,
+                type TEXT DEFAULT 'def',
                 status TEXT NOT NULL,
                 payload TEXT,
                 scheduled_for TEXT,
@@ -33,18 +34,25 @@ class JobTracker:
                 updated_at TEXT NOT NULL
             )
         ''')
+        # Simple migration: check if 'type' column exists
+        cursor.execute("PRAGMA table_info(jobs)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'type' not in columns:
+            logger.info("Migrating job_tracker.db: Adding 'type' column")
+            cursor.execute("ALTER TABLE jobs ADD COLUMN type TEXT DEFAULT 'def'")
+            
         conn.commit()
         conn.close()
 
-    def create_job(self, job_id: str, department: str, payload: Dict[str, Any]) -> bool:
+    def create_job(self, job_id: str, department: str, payload: Dict[str, Any], job_type: str = "def") -> bool:
         """Create a new job in the tracker."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now().isoformat()
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO jobs (job_id, department, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-                (job_id, department, 'PENDING', json.dumps(payload), now, now)
+                'INSERT INTO jobs (job_id, department, type, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (job_id, department, job_type, 'PENDING', json.dumps(payload), now, now)
             )
             conn.commit()
             return True
@@ -125,7 +133,7 @@ class JobTracker:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute('SELECT department, status, payload, scheduled_for, reminder_sent FROM jobs WHERE job_id = ?', (job_id,))
+            cursor.execute('SELECT department, status, payload, scheduled_for, reminder_sent, type FROM jobs WHERE job_id = ?', (job_id,))
             row = cursor.fetchone()
             if row:
                 return {
@@ -134,7 +142,8 @@ class JobTracker:
                     "status": row[1],
                     "payload": json.loads(row[2]) if row[2] else {},
                     "scheduled_for": row[3],
-                    "reminder_sent": bool(row[4])
+                    "reminder_sent": bool(row[4]),
+                    "type": row[5]
                 }
             return None
         except Exception as e:
@@ -150,7 +159,7 @@ class JobTracker:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            query = 'SELECT job_id, department, status, payload, scheduled_for, reminder_sent FROM jobs WHERE status IN ({})'.format(
+            query = 'SELECT job_id, department, status, payload, scheduled_for, reminder_sent, type FROM jobs WHERE status IN ({})'.format(
                 ','.join('?' * len(statuses))
             )
             cursor.execute(query, statuses)
@@ -161,7 +170,8 @@ class JobTracker:
                     "status": row[2],
                     "payload": json.loads(row[3]) if row[3] else {},
                     "scheduled_for": row[4],
-                    "reminder_sent": bool(row[5])
+                    "reminder_sent": bool(row[5]),
+                    "type": row[6]
                 })
             return jobs
         except Exception as e:

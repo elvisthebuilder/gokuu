@@ -884,6 +884,24 @@ class GokuAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "manage_schedules",
+                    "description": "Create, list, or remove recurring autonomous tasks (e.g. daily greetings, reminders). Restricted to Owner only.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["add", "list", "remove"]},
+                            "name": {"type": "string", "description": "Short mnemonic name for the job (e.g. 'morning_quote')."},
+                            "cron": {"type": "string", "description": "Standard cron expression (e.g. '0 8 * * *' for 8 AM daily)."},
+                            "prompt": {"type": "string", "description": "The prompt Goku should execute (e.g. 'Give a motivational quote')."},
+                            "job_id": {"type": "string", "description": "Required only for 'remove' action."}
+                        },
+                        "required": ["action"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "submit_to_audit",
                     "description": "Submit a report or proposal to the Audit Department for review. Use this as your final action if you are `@health` or `@research`.",
                     "parameters": {
@@ -1161,7 +1179,56 @@ class GokuAgent:
                 except Exception as e:
                     logger.warning(f"Could not parse tool arguments for {tool_name}, defaulting to empty dict. Error: {e}")
                     tool_args = {}
-                if tool_name == "manage_tasks":
+                if tool_name == "manage_schedules":
+                    # SECURITY: Only the owner can manage schedules
+                    is_owner = False
+                    owner_raw = config_mgr.get_key("GOKU_OWNER_NUMBER", "")
+                    if owner_raw:
+                        # Extract sender from text if available (WhatsApp format)
+                        import re
+                        sender_match = re.search(r'\[FROM:.*? \(\+(\d+)\)\]', user_text)
+                        if sender_match:
+                            sender_ph = sender_match.group(1)
+                            if sender_ph == "".join(filter(str.isdigit, owner_raw)):
+                                is_owner = True
+                    
+                    # Fallback for CLI/Web (local is owner)
+                    if source in ["cli", "web"]: is_owner = True
+                    
+                    if not is_owner:
+                        result = {"status": "error", "message": "Access Denied: Only the Boss (Owner) can manage schedules."}
+                    else:
+                        from server.scheduler_manager import scheduler_manager # type: ignore
+                        action = tool_args.get("action")
+                        if action == "add":
+                            name = tool_args.get("name", "job")
+                            cron = tool_args.get("cron")
+                            prompt = tool_args.get("prompt")
+                            if not cron or not prompt:
+                                result = {"status": "error", "message": "Missing 'cron' or 'prompt' for add action."}
+                            else:
+                                # Extract group name from prefix if available
+                                group_name = None
+                                group_match = re.search(r'\[GROUP: (.*?)\]', user_text)
+                                if group_match:
+                                    group_name = group_match.group(1)
+                                    
+                                success = scheduler_manager.add_autonomous_job(name, cron, prompt, source, session_id, group_name)
+                                result = {"status": "success" if success else "error"}
+                        elif action == "list":
+                            result = {"status": "success", "jobs": scheduler_manager.list_jobs()}
+                        elif action == "remove":
+                            job_id = tool_args.get("job_id")
+                            if not job_id:
+                                result = {"status": "error", "message": "Missing 'job_id' for remove action."}
+                            else:
+                                success = scheduler_manager.remove_job(job_id)
+                                result = {"status": "success" if success else "error"}
+                        else:
+                            result = {"status": "error", "message": f"Unknown action: {action}"}
+                    
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                elif tool_name == "manage_tasks":
                     tasks = self.session_tasks[session_id]
                     action = tool_args.get("action")
                     if action == "add": tasks.extend(tool_args.get("tasks", []))
