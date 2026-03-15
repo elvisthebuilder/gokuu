@@ -178,10 +178,11 @@ class ChannelBroker:
                     logger.debug(f"[BROKER TRACE] Agent event: {event.get('type')}")
                     
                     if event["type"] == "message":
+                        import re as _re # Local import to avoid any shadowing issues
                         chunk = event["content"]
                         if chunk:
                             # Clean any residual thought tags just in case
-                            chunk = re.sub(r'<(thought|think)>.*?(</\1>|$)', '', chunk, flags=re.DOTALL).strip()
+                            chunk = _re.sub(r'<(thought|think)>.*?(</\1>|$)', '', chunk, flags=_re.DOTALL).strip()
                             if chunk:
                                 response_text = f"{response_text}\n\n{chunk}" if response_text else chunk
                                 current_buffer = f"{current_buffer}{chunk}"
