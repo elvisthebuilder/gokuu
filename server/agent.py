@@ -213,9 +213,9 @@ class GokuAgent:
         system_msg = history[0] if history and history[0].get("role") == "system" else None
         
         if system_msg:
-            trimmed = [system_msg] + history[-(max_messages - 1):]
+            trimmed = [system_msg] + history[-(max_messages - 1):]  # type: ignore[index]
         else:
-            trimmed = history[-max_messages:]
+            trimmed = history[-max_messages:]  # type: ignore[index]
             
         self.histories[session_id] = trimmed
         logger.debug(f"Trimmed history for {session_id} to {len(trimmed)} messages.")
@@ -397,12 +397,16 @@ class GokuAgent:
             return f"[Error during external vision analysis: {e}]"
 
     async def run_agent(self, user_text: str, source: str = "cli", session_id: str = "default", react_fn: Optional[Callable[[str], Awaitable[Any]]] = None, is_group: bool = False) -> AsyncGenerator[Dict[str, Any], None]:
-        """Runs the agent loop and yields thoughts, messages, and tool results."""
-        self._trim_history(session_id)
+        """Runs the agent loop and yields thoughts, messages, and tool results.
+        
+        Args:
+            user_text: The user's input message.
             source: The interface source — 'cli', 'web', or 'telegram'.
             session_id: The ID for the conversation session (e.g. chat_id).
             react_fn: An optional asynchronous function to send a reaction to the user's message.
+            is_group: Whether the message is from a group chat.
         """
+        self._trim_history(session_id)
         if not user_text:
             return
 
