@@ -25,3 +25,8 @@ Exams/
 test_file.txt
 *.db
 qdrant_data/
+server/personalities/
+uploads/
+*session.db
+persona/
+personalities/
