@@ -60,6 +60,7 @@ else
     echo "📁 Creating installation directory at $GOKU_DIR..."
     mkdir -p "$GOKU_DIR"
     mkdir -p "$GOKU_DIR/qdrant_data"
+    mkdir -p "$GOKU_DIR/logs"
 fi
 
 # 3. Determine Source (Local or Remote)
@@ -226,8 +227,8 @@ Environment=\"PATH=$GOKU_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin\"
 ExecStart=$GOKU_DIR/venv/bin/python3 $GOKU_DIR/server/gateway.py
 Restart=always
 RestartSec=5
-StandardOutput=append:$GOKU_DIR/goku.log
-StandardError=append:$GOKU_DIR/goku.log
+StandardOutput=append:$GOKU_DIR/logs/goku.log
+StandardError=append:$GOKU_DIR/logs/goku.log
 
 [Install]
 WantedBy=multi-user.target"

@@ -10,10 +10,24 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv # type: ignore
 
 # Set up dedicated logging for the Gateway
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s:%(levelname)s - %(message)s'
-)
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "goku.log")
+
+# Setup root-level logging to file
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+
+# Also log to stdout for systemd capture
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+root_logger.addHandler(console_handler)
+
 logger = logging.getLogger("Gateway")
 
 # Enable debug logging for our trace modules if needed
