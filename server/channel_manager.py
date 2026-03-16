@@ -16,13 +16,24 @@ class ChannelBroker:
         self._pending_requests: Dict[str, Dict[str, Any]] = {}
         self._busy_sessions: set = set()
         self.debounce_seconds = 2.0
-        # {source_name: send_message_fn} - Used for proactive messaging
-        self._interfaces: Dict[str, Callable[[str, str], Awaitable[Any]]] = {}
+        # {source_name: {"send": send_fn, "list_groups": list_fn}}
+        self._interfaces: Dict[str, Dict[str, Any]] = {}
 
-    def register_interface(self, source: str, send_fn: Callable[[str, str], Awaitable[Any]]):
-        """Register a bot's sending capability. send_fn takes (session_id, text)."""
-        self._interfaces[source] = send_fn
+    def register_interface(self, source: str, send_fn: Callable[[str, str], Awaitable[Any]], group_lister: Optional[Callable[[], Awaitable[List[Dict[str, str]]]]] = None):
+        """Register a bot's sending and listing capabilities."""
+        self._interfaces[source] = {
+            "send": send_fn,
+            "list_groups": group_lister
+        }
         logger.info(f"Registered interface for {source}")
+
+    async def get_groups(self, source: str) -> List[Dict[str, str]]:
+        """List groups for a specific source."""
+        if source in self._interfaces:
+            lister = self._interfaces[source].get("list_groups")
+            if lister:
+                return await lister()
+        return []
 
     async def trigger_autonomous_agent(self, source: str, session_id: str, prompt: str, group_name: Optional[str] = None):
         """Trigger the agent proactively (without an incoming message)."""
@@ -30,11 +41,11 @@ class ChannelBroker:
             logger.error(f"Cannot trigger autonomous agent for {source}: No interface registered.")
             return
 
+        send_fn = self._interfaces[source]["send"]
+        
         # Prepend group context if available
         if group_name:
             prompt = f"[GROUP: {group_name}] {prompt}"
-        
-        send_fn = self._interfaces[source]
         
         # We wrap the send_fn to match the (text) signature expected by _run_agent_for_session
         async def wrapped_send(text: str):

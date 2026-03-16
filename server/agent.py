@@ -177,6 +177,12 @@ class GokuAgent:
             "• Never suggest using legacy tools like `espeak`, `festival`, or `gtts`. Always use ElevenLabs.\n"
             "• When a user sends a voice note, your response will automatically be converted to a voice note if you were summoned via voice.\n\n"
 
+            "21️⃣ PROACTIVE & GROUP CAPABILITIES\n"
+            "• **You have FULL power to message groups proactively.**\n"
+            "• Use `list_groups` to see all groups you are a member of.\n"
+            "• Use `manage_schedules` to set up autonomous tasks for any group or DM. You do NOT need a prior message to trigger these once scheduled.\n"
+            "• NEVER tell the user you lack 'API access' or 'session permission' for WhatsApp groups. Your Neonize core gives you direct access.\n\n"
+
             "Your mission: execute intelligently, recover gracefully, and deliver complete results with minimal friction."
         )
 
@@ -884,6 +890,18 @@ class GokuAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "list_groups",
+                    "description": "List all groups the bot is currently a member of on the current platform (WhatsApp/Telegram).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "manage_schedules",
                     "description": "Create, list, or remove recurring autonomous tasks (e.g. daily greetings, reminders). Restricted to Owner only.",
                     "parameters": {
@@ -1225,6 +1243,11 @@ class GokuAgent:
                                 result = {"status": "success" if success else "error"}
                         else:
                             result = {"status": "error", "message": f"Unknown action: {action}"}
+                
+                elif tool_name == "list_groups":
+                    from server.channel_manager import channel_broker # type: ignore
+                    groups = await channel_broker.get_groups(source)
+                    result = {"status": "success", "groups": groups}
                     
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "manage_tasks":

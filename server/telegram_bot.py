@@ -397,7 +397,13 @@ async def start_telegram_bot(token: str):
         _application = ApplicationBuilder().token(token).build()
         
         # Register interface for proactive messaging
-        channel_broker.register_interface("telegram", send_telegram_message)
+        async def send_tg_interface(session_id: str, text: str):
+            # The session_id for Telegram will be "tg_<chat_id>"
+            chat_id = int(session_id.replace("tg_", ""))
+            # Use the global _application.bot instance
+            await _application.bot.send_message(chat_id=chat_id, text=text)
+
+        channel_broker.register_interface("telegram", send_tg_interface)
         
         _application.add_handler(CommandHandler("start", start))
         _application.add_handler(CommandHandler("ping", ping))

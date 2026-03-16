@@ -2,7 +2,7 @@ import logging
 import os
 import asyncio
 import threading
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from neonize.client import NewClient # type: ignore
 from neonize.events import MessageEv, ConnectedEv # type: ignore
 from neonize.utils.enum import ChatPresence, ChatPresenceMedia, ReceiptType # type: ignore
@@ -87,7 +87,25 @@ class WhatsAppBot:
                 chat_jid = session_id.replace("wa_", "")
                 await self.send_message_direct(chat_jid, text)
 
-            channel_broker.register_interface("whatsapp", send_wa_interface)
+            async def list_wa_groups() -> List[Dict[str, str]]:
+                if not self.client: return []
+                try:
+                    # Neonize call
+                    groups = self.client.get_joined_groups()
+                    results = []
+                    for g in groups:
+                        jid_str = f"{g.JID.User}@{g.JID.Server}"
+                        results.append({
+                            "jid": jid_str,
+                            "name": g.GroupName or "Unknown Group",
+                            "session_id": f"wa_{jid_str}"
+                        })
+                    return results
+                except Exception as e:
+                    logger.error(f"Failed to list WhatsApp groups: {e}")
+                    return []
+
+            channel_broker.register_interface("whatsapp", send_wa_interface, list_wa_groups)
 
             # Register connected event
             @client.event(ConnectedEv)
