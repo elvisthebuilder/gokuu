@@ -1239,7 +1239,13 @@ class GokuAgent:
                 elif tool_name == "list_groups":
                     from server.channel_manager import channel_broker # type: ignore
                     groups = await channel_broker.get_groups(source)
-                    result = {"status": "success", "groups": groups}
+                    # Groups may contain neonize GroupName objects which are not JSON serializable.
+                    safe_groups = [
+                        {"id": str(g.get("id", "")), "name": str(g.get("name", ""))}
+                        for g in groups
+                    ] if isinstance(groups, list) else str(groups)
+                    
+                    result = {"status": "success", "groups": safe_groups}
                     
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "manage_tasks":
