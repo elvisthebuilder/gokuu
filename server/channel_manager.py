@@ -35,6 +35,24 @@ class ChannelBroker:
                 return await lister()
         return []
 
+    async def send_message(self, source: str, jid: str, text: str) -> bool:
+        """Send a message to a specific JID (user or group) via the registered source interface."""
+        if source not in self._interfaces:
+            logger.error(f"Cannot send message for {source}: no interface registered.")
+            return False
+        send_fn = self._interfaces[source].get("send")
+        if not send_fn:
+            logger.error(f"No send function registered for {source}.")
+            return False
+        try:
+            await send_fn(jid, text)
+            logger.info(f"[BROKER] Sent message to {jid} via {source}")
+            return True
+        except Exception as e:
+            logger.error(f"[BROKER] Failed to send to {jid} via {source}: {e}")
+            return False
+
+
     async def trigger_autonomous_agent(self, source: str, session_id: str, prompt: str, group_name: Optional[str] = None):
         """Trigger the agent proactively (without an incoming message)."""
         if source not in self._interfaces:

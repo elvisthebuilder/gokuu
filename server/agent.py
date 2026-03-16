@@ -883,11 +883,32 @@ class GokuAgent:
                 "type": "function",
                 "function": {
                     "name": "list_groups",
-                    "description": "List all groups the bot is currently a member of on the current platform (WhatsApp/Telegram).",
+                    "description": "List all groups the bot is currently a member of on the current platform (WhatsApp/Telegram). Returns a list with 'name', 'jid', and 'session_id' for each group. Use the 'jid' field with send_message to target a specific group.",
                     "parameters": {
                         "type": "object",
                         "properties": {},
                         "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message proactively to a specific WhatsApp or Telegram group or user. Use list_groups first to get the correct JID. The 'jid' for WhatsApp groups looks like '120363xxxxxxxx@g.us'. For Telegram, it is the numeric chat ID.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "jid": {
+                                "type": "string",
+                                "description": "The target JID (WhatsApp group/user JID or Telegram chat ID) to send the message to."
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "The message content to send."
+                            }
+                        },
+                        "required": ["jid", "text"]
                     }
                 }
             },
@@ -1241,11 +1262,22 @@ class GokuAgent:
                     groups = await channel_broker.get_groups(source)
                     # Groups may contain neonize GroupName objects which are not JSON serializable.
                     safe_groups = [
-                        {"id": str(g.get("id", "")), "name": str(g.get("name", ""))}
+                        {"jid": str(g.get("jid", "")), "name": str(g.get("name", ""))}
                         for g in groups
                     ] if isinstance(groups, list) else str(groups)
                     
                     result = {"status": "success", "groups": safe_groups}
+                    
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                elif tool_name == "send_message":
+                    from server.channel_manager import channel_broker # type: ignore
+                    jid = tool_args.get("jid")
+                    text = tool_args.get("text")
+                    if not jid or not text:
+                        result = {"status": "error", "message": "Missing 'jid' or 'text' for send_message."}
+                    else:
+                        success = await channel_broker.send_message(source, jid, text)
+                        result = {"status": "success" if success else "error"}
                     
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "manage_tasks":
