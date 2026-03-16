@@ -14,7 +14,7 @@ import os
 import logging
 import re
 
-# Setup file logging for v2.5
+# Setup file logging for v3.0
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "goku.log")
 file_handler = logging.FileHandler(LOG_FILE)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))

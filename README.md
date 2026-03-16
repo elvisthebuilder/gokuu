@@ -1,17 +1,14 @@
-# Goku CLI Agent v2.5 🐉
+# Goku CLI Agent v3.0 🐉
 
 Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
 
-## 🚀 What's New in v2.5
-- **Autonomous Group Tasks & Scheduling**: Goku can now execute recurring tasks (e.g., daily greetings, status reminders) in groups. Triggered by the new `manage_schedules` tool, exclusive to the **Owner**.
-- **Contextual Group Awareness**: Goku now explicitly identifies and names the group he is interacting with across WhatsApp and Telegram, enabling more personalized and context-aware responses.
-- **Persistent Multimodal Memory**: Goku now remembers text, images, and documents (PDF/Docx) across restarts. Using Gemini Embedding 2, memories are isolated per persona, ensuring no data leakage between AI personalities.
-- **Qdrant Auto-Pilot**: The vector engine now starts automatically via Docker when needed, with persistent storage mapped to `~/.goku-agent/qdrant_data`.
-- **Channel-Specific Personalities**: Assign customized LLM system prompts (personas) to specific users or channels natively via the new `/persona` interactive command.
-- **All-in-One Background Gateway**: A robust, headless `systemd` daemon that runs WhatsApp, Telegram, and JobTracker pollers silently in the background.
-- **Departmental Evolution Flow (DEF)**: A multi-agent pipeline system (Health, Audit, Implement, Research) for complex engineering tasks.
-- **Premium Messaging Design**: High-fidelity ASCII tables and bulletproof markdown for WhatsApp and Telegram.
-- **Diagnostic Logging**: Clean CLI experience with persistent file-based logging (`goku logs`) and specialized `goku channel logs` for bot activity.
+## 🚀 What's New in v3.0: The Sentient Update
+- **Passive Intelligence & "The Overhear System"**: Goku now maintains continuous awareness in group chats, recording background context into memory even when not directly addressed.
+- **Group Interaction 2.0**: Enhanced support for direct replies, `@all` tags, and contextual triggers across WhatsApp and Telegram.
+- **Autonomous Group Tasks**: Schedule recurring agent actions (proactive status updates, greetings, reports) directly within channels.
+- **Persistent Multimodal Memory**: Cross-persona memory isolation using Gemini Embedding 2, supporting text, images, and complex document types.
+- **All-in-One Gateway Daemon**: Headless background service for silent, reliable connectivity.
+- **Professional Diagnostic Suite**: `goku logs` and `goku channel logs` for deep observability.
 
 ## 👔 Professional Guidelines for Users
 
