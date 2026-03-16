@@ -139,7 +139,7 @@ case "$1" in
         else
              echo "🚀 Update found! Re-running installer..."
              git reset --hard origin/main
-             git clean -fd --quiet --exclude=qdrant_data
+             git clean -fd --quiet --exclude=qdrant_data --exclude=server/personalities
              
              # Make sure install.sh is executable
              chmod +x ./install.sh

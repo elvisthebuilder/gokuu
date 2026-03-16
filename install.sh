@@ -72,7 +72,7 @@ if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" == "$0" ]; then
         cd "$GOKU_DIR"
         git fetch origin
         git reset --hard origin/main
-        git clean -fd --quiet
+        git clean -fd --quiet --exclude=qdrant_data --exclude=server/personalities
     else
         # Clean directory if it exists but is empty or not a repo (safe init)
         # But we already checked above.
@@ -89,7 +89,21 @@ else
     # Local Install (running ./install.sh)
     SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     echo "📦 Copying local files from $SOURCE_DIR to $GOKU_DIR..."
+    
+    # Backup user-data files that must not be overwritten by the local copy
+    MAPPING_BACKUP=""
+    if [ -f "$GOKU_DIR/server/personalities/mapping.json" ]; then
+        MAPPING_BACKUP=$(cat "$GOKU_DIR/server/personalities/mapping.json")
+    fi
+    
     cp -r "$SOURCE_DIR/." "$GOKU_DIR/"
+    
+    # Restore the persona mapping file after the copy
+    if [ -n "$MAPPING_BACKUP" ]; then
+        mkdir -p "$GOKU_DIR/server/personalities"
+        echo "$MAPPING_BACKUP" > "$GOKU_DIR/server/personalities/mapping.json"
+        echo "✅ Persona channel mappings preserved."
+    fi
 fi
 
 
