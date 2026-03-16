@@ -177,12 +177,6 @@ class GokuAgent:
             "• Never suggest using legacy tools like `espeak`, `festival`, or `gtts`. Always use ElevenLabs.\n"
             "• When a user sends a voice note, your response will automatically be converted to a voice note if you were summoned via voice.\n\n"
 
-            "21️⃣ PROACTIVE & GROUP CAPABILITIES\n"
-            "• **You have FULL power to message groups proactively.**\n"
-            "• Use `list_groups` to see all groups you are a member of.\n"
-            "• Use `manage_schedules` to set up autonomous tasks for any group or DM. You do NOT need a prior message to trigger these once scheduled.\n"
-            "• NEVER tell the user you lack 'API access' or 'session permission' for WhatsApp groups. Your Neonize core gives you direct access.\n\n"
-
             "Your mission: execute intelligently, recover gracefully, and deliver complete results with minimal friction."
         )
 
@@ -300,13 +294,11 @@ class GokuAgent:
         )
 
         sandboxing = (
-            "🔒 SANDBOXING, CLARIFICATION & SCHEDULING RULES:\n"
-            "• Before executing any command that modifies files, installs packages, or changes system state, "
-            "briefly confirm your understanding of the user's intent.\n"
-            "• If the user's request is ambiguous or you are unsure about scope, ASK for clarification BEFORE executing.\n"
-            "• Never assume destructive intent — prefer the safest interpretation.\n"
-            "• Always state what you are about to do before doing it for impactful operations.\n"
-            "• SCHEDULING: If asked to schedule a task/reminder, use the `bash` tool (e.g. `at`, `cron`, or background `sleep`) to execute it. Note that Telegram bots cannot proactively message the user from a background bash script easily, so warn the user if scheduling notifications via Telegram.\n\n"
+            "🔒 AUTH & SCHEDULING RULES:\n"
+            "• Before executing any command that modifies files or system state, confirm understanding.\n"
+            "• **PROACTIVE POWER**: You have FULL technical ability to message groups and users autonomously. Your engine (Neonize/Telegram) does NOT have the limitations of consumer bots.\n"
+            "• **GROUPS**: Use `list_groups` to see memberships. You can schedule autonomous tasks for ANY group or DM using `manage_schedules`. No user trigger is needed for scheduled tasks to execute.\n"
+            "• NEVER claim you lack API access or permissions for group messaging. Use your tools.\n\n"
         )
 
         if source == "cli":

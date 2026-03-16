@@ -315,7 +315,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Response send failed: {e}")
             await context.bot.send_message(chat_id=chat_id, text=strip_markdown(text))
 
-    # 4. Delegate to Broker
+    # 4. Group Interaction Logic & Passive Memory
+    should_respond = True
+    if is_group:
+        bot_username = (await context.bot.get_me()).username
+        is_reply_to_me = False
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            if update.message.reply_to_message.from_user.id == context.bot.id:
+                is_reply_to_me = True
+        
+        text_lower = query.lower()
+        mentioned = (
+            f"@{bot_username.lower()}" in text_lower or 
+            "goku" in text_lower or 
+            "@all" in text_lower or 
+            is_reply_to_me
+        )
+        
+        if not mentioned:
+            # PASSIVE MEMORY: Record background context
+            try:
+                from server.personality_manager import personality_manager # type: ignore
+                from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
+                
+                active_name = GOKU_DEFAULT_PERSONA
+                mappings = personality_manager.get_all_mappings()
+                for target_map, p_name in mappings.items():
+                    if str(chat_id) == target_map or "telegram" == target_map:
+                        active_name = str(p_name)
+                        break
+                
+                snippet = f"[Passive Record] {query}"
+                # We use create_task because we are in an async function already
+                asyncio.create_task(
+                    memory.add_memory(
+                        text=snippet,
+                        persona_name=active_name,
+                        metadata={"sender": sender_name, "group": chat_id, "passive": True}
+                    )
+                )
+                logger.debug(f"[MEMORY] Logged passive Telegram context for {active_name}")
+            except Exception as em:
+                logger.debug(f"[MEMORY ERROR] Passive logging failed: {em}")
+            
+            should_respond = False
+
+    if not should_respond:
+        return
+
+    # 5. Delegate to Broker
     await channel_broker.handle_incoming_message(
         session_id=str(chat_id),
         content=query,

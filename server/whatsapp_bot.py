@@ -11,6 +11,7 @@ from .config_manager import config_manager # type: ignore
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ReactionMessage, Message # type: ignore
 from neonize.proto.waCommon.WACommon_pb2 import MessageKey # type: ignore
 import time
+import threading
 
 logger = logging.getLogger("WhatsAppBot")
 
@@ -308,13 +309,12 @@ class WhatsAppBot:
 
                     if not text:
                         logger.debug("[TRACE] No text content found, ignoring.")
-                        return
-
-                    # Mentions
+                                          # 4. Group Interaction Logic
                     if is_group and group_policy == "mentions":
-                        # 1. Proto-level mentionedJid check (Native tagging)
                         proto_mentioned = False
+                        is_reply_to_me = False
                         ctx = None
+                        
                         if hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage.contextInfo:
                             ctx = msg.extendedTextMessage.contextInfo
                         elif hasattr(msg, "imageMessage") and msg.imageMessage.contextInfo:
@@ -324,16 +324,22 @@ class WhatsAppBot:
                         elif hasattr(msg, "documentMessage") and msg.documentMessage.contextInfo:
                             ctx = msg.documentMessage.contextInfo
 
-                        if ctx and hasattr(ctx, "mentionedJid") and ctx.mentionedJid:
-                            for mjid in ctx.mentionedJid:
-                                # Check if tagged JID matches our Phone (digits) or LID (digits)
-                                if (bot_phone and bot_phone in mjid) or (self.bot_lid_user and self.bot_lid_user in mjid):
-                                    proto_mentioned = True
-                                    break
+                        if ctx:
+                            # Direct mentions
+                            if hasattr(ctx, "mentionedJid") and ctx.mentionedJid:
+                                for mjid in ctx.mentionedJid:
+                                    if (bot_phone and bot_phone in mjid) or (self.bot_lid_user and self.bot_lid_user in mjid):
+                                        proto_mentioned = True
+                                        break
+                            
+                            # Reply to our message
+                            if hasattr(ctx, "participant") and ctx.participant:
+                                quoted_jid = safe_get_jid(ctx.participant)
+                                if (bot_phone and bot_phone in quoted_jid) or (self.bot_lid_user and self.bot_lid_user in quoted_jid):
+                                    is_reply_to_me = True
+                                    logger.debug(f"[TRACE] Detected reply to bot's message.")
                         
-                        # 2. Text-based fallback (Look for name or ID digits)
                         bot_jid_digits = normalize_digits(bot_jid)
-                        
                         text_mentioned = (
                             "goku" in text.lower() or 
                             "@all" in text.lower() or
@@ -342,11 +348,36 @@ class WhatsAppBot:
                             (self.bot_lid_user and self.bot_lid_user in text)
                         )
                         
-                        mentioned = proto_mentioned or text_mentioned
-                        logger.debug(f"Group mention check (v3): proto={proto_mentioned}, text={text_mentioned}, final={mentioned}")
+                        mentioned = proto_mentioned or text_mentioned or is_reply_to_me
+                        logger.debug(f"Group interaction check (v4): proto={proto_mentioned}, reply={is_reply_to_me}, text={text_mentioned}, final={mentioned}")
+                        
                         if not mentioned:
+                            # PASSIVE MEMORY: Store context even if not responding
+                            try:
+                                from server.personality_manager import personality_manager # type: ignore
+                                from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
+                                
+                                active_name = GOKU_DEFAULT_PERSONA
+                                mappings = personality_manager.get_all_mappings()
+                                for target_map, p_name in mappings.items():
+                                    if session_id == target_map or "whatsapp" == target_map:
+                                        active_name = str(p_name)
+                                        break
+                                
+                                snippet = f"[Passive Record] {text}"
+                                if self.main_loop and not self.main_loop.is_closed():
+                                    asyncio.run_coroutine_threadsafe(
+                                        memory.add_memory(
+                                            text=snippet,
+                                            persona_name=active_name,
+                                            metadata={"sender": sender_ph, "group": chat_jid, "passive": True}
+                                        ), 
+                                        self.main_loop
+                                    )
+                                    logger.debug(f"[MEMORY] Logged passive context for {active_name}")
+                            except Exception as em:
+                                logger.debug(f"[MEMORY ERROR] Passive logging failed: {em}")
                             return
-
                     logger.info(f"Accepted WhatsApp message from +{sender_ph} in {chat_jid}")
                     # Mark the message as read (blue ticks)
                     try:
@@ -358,15 +389,16 @@ class WhatsAppBot:
                         )
                     except Exception as e:
                         logger.warning(f"[TRACE] Failed to mark message {message.Info.ID} as read: {e}")
+                    
                     try:
                         # Send "typing..." indicator immediately
                         c.send_chat_presence(raw_chat, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
                     except:
                         pass
+                    
                     session_id = f"wa_{chat_jid}"
                     
                     # Sender Identification: Always enrich the message with sender context.
-                    # This allows personas to identify VIPs (e.g., the CEO's number) from their system prompt.
                     if is_group:
                         # Fetch group name
                         group_name = self._group_info_cache.get(chat_jid, "")
@@ -383,8 +415,6 @@ class WhatsAppBot:
                         sender_name = getattr(message.Info, "PushName", "") or sender_ph or "Unknown"
                         text = f"{group_prefix}[FROM: {sender_name} (+{sender_ph})]: {text}"
                     else:
-                        # For DMs, the 'from' is implicit but we still surface the phone number
-                        # so personas can match it against VIP numbers in their instructions.
                         sender_name = getattr(message.Info, "PushName", "") or "User"
                         if sender_ph:
                             text = f"[FROM: {sender_name} (+{sender_ph})]: {text}"
