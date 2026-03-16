@@ -1315,7 +1315,7 @@ def interactive():
             return
 
     console.clear()
-    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v2.5[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
+    rprint(Panel("[bold green]🐉 GOKU CLI AGENT v3.0[/bold green]\nType [bold red]'exit'[/bold red] to quit or [bold cyan]'status'[/bold cyan] for info.", border_style="green"))
     
     # Run the main async loop
     try:
