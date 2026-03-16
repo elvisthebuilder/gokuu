@@ -365,14 +365,15 @@ class WhatsAppBot:
                                         break
                                 
                                 snippet = f"[Passive Record] {text}"
-                                if self.main_loop and not self.main_loop.is_closed():
+                                ml = self.main_loop
+                                if ml and not ml.is_closed():
                                     asyncio.run_coroutine_threadsafe(
                                         memory.add_memory(
                                             text=snippet,
                                             persona_name=active_name,
                                             metadata={"sender": sender_ph, "group": chat_jid, "passive": True}
                                         ), 
-                                        self.main_loop
+                                        ml
                                     )
                                     logger.debug(f"[MEMORY] Logged passive context for {active_name}")
                             except Exception as em:
@@ -488,18 +489,9 @@ class WhatsAppBot:
                     # Log thread info for debugging
                     curr_thread = threading.current_thread().name
                     
-                    # Check if the stored loop is usable
-                    loop_usable = False
-                    if target_loop:
-                        try:
-                            if not target_loop.is_closed():
-                                loop_usable = True
-                        except Exception:
-                            pass
-
-                    if loop_usable:
+                    if target_loop and not target_loop.is_closed():
                         logger.debug(f"[TRACE] Delegating to main_loop from thread {curr_thread}")
-                        asyncio.run_coroutine_threadsafe(async_delegate(), target_loop) # type: ignore
+                        asyncio.run_coroutine_threadsafe(async_delegate(), target_loop)
                     else:
                         logger.warning(f"[TRACE] main_loop is Null or CLOSED in thread {curr_thread}. Attempting recovery...")
                         try:
