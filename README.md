@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/assets/goku-logo.png" alt="Goku Logo" width="200" />
+  <img src="https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/assets/goku-logo.jpeg" alt="Goku Logo" width="200" />
   
   # Goku CLI Agent v3.0 🐉
   
