@@ -1,97 +1,129 @@
-# Goku CLI Agent v3.0 🐉
+<div align="center">
+  <img src="https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/uploads/goku_logo.png" alt="Goku Logo" width="200" />
+  
+  # Goku CLI Agent v3.0 🐉
+  
+  **The Sentient Update: Autonomous. Aware. Collaborative.**
 
-Goku is an intelligent terminal agent designed for high-performance development and workflow orchestration. It leverages MCP tools, long-term vector memory, and multi-agent "Departmental" pipelines to solve complex tasks directly from your terminal, WhatsApp, or Telegram.
+  [![Version](https://img.shields.io/badge/version-3.0.0-blue.svg?style=for-the-badge)](https://github.com/elvisthebuilder/gokuu)
+  [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](LICENSE)
+  [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-brightgreen.svg?style=for-the-badge)](https://github.com/elvisthebuilder/gokuu/graphs/commit-activity)
+  [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-orange.svg?style=for-the-badge)](https://github.com/elvisthebuilder/gokuu)
 
-## 🚀 What's New in v3.0: The Sentient Update
-- **Passive Intelligence & "The Overhear System"**: Goku now maintains continuous awareness in group chats, recording background context into memory even when not directly addressed.
-- **Group Interaction 2.0**: Enhanced support for direct replies, `@all` tags, and contextual triggers across WhatsApp and Telegram.
-- **Autonomous Group Tasks**: Schedule recurring agent actions (proactive status updates, greetings, reports) directly within channels.
-- **Persistent Multimodal Memory**: Cross-persona memory isolation using Gemini Embedding 2, supporting text, images, and complex document types.
-- **All-in-One Gateway Daemon**: Headless background service for silent, reliable connectivity.
-- **Professional Diagnostic Suite**: `goku logs` and `goku channel logs` for deep observability.
+  ---
 
-## 👔 Professional Guidelines for Users
+  Goku is an elite terminal orchestrator that bridges the gap between static CLI tools and sentient-like agency. 
+  By combining **Long-term Multimodal Memory**, **Passive Context Awareness**, and **Cross-Platform Delivery**, 
+  Goku v3.0 empowers developers to automate the impossible.
 
-To get the most out of Goku v2.5, follow these professional communication standards:
+  [Core Vision](#-core-vision) • [What's New](#-whats-new-in-v30) • [Architecture](#-architecture) • [Quick Start](#-quick-start)
+</div>
 
-1. **Be Explicit with Goals**: When scheduling autonomous tasks, provide clear instructions. Instead of "Say hi," use "Every morning at 8 AM, provide a brief, professional greeting and ask the team for their top three priorities."
-2. **Utilize Context**: Mention specific folders or project names. Goku uses a vector memory system; referencing keywords helps him retrieve the right implementation plans.
-3. **Confirm sensitive plans**: While Goku is autonomous, use the `manage_tasks` and `request_user_approval` tools to review complex changes before final implementation.
-4. **Persona Alignment**: Switch to the right persona for the task (e.g., use a "Senior Architect" persona for code reviews and a "Project Manager" persona for scheduling).
-5. **Security First**: If scheduling tasks, ensure you are communicating from your registered **Owner** number. Goku will reject management commands from unauthorized users.
+## 🧠 Core Vision
+
+Goku isn't just a bot; it's a **Departmental Pipeline**. It doesn't just "chat"—it researches, audits, and implements complex engineering tasks using specialized sub-agents. With the v3.0 "Sentient Update," Goku now "overhears" conversations to build background context, making it the most socially intelligent CLI agent in existence.
+
+---
+
+## 🚀 What's New in v3.0: *The Sentient Update*
+
+### 👁️ **Passive Intelligence & "The Overhear System"**
+Goku now maintains continuous awareness in your group chats. Even when you don't tag him, he records the background conversation into his vector memory.
+- **Contextual Recall**: Ask him "@goku, what was the team's consensus on the database migration earlier?" and he'll know.
+- **Silent Learning**: He builds situational context without interrupting your workflow.
+
+### ⚡ **Autonomous Agency & Proactive Scheduling**
+Goku is now proactive. He doesn't wait for your command to manage your world.
+- **Recurring Jobs**: Schedule daily status reports, health checks, or greetings directly from Telegram or WhatsApp.
+- **Owner-Exclusive Control**: Secure management via the `manage_schedules` tool, restricted to reaching the Owner's verified ID.
+
+### 📱 **Unified Channel Interaction 2.0**
+Deep integration with WhatsApp and Telegram with high-fidelity formatting.
+- **Native Replies**: Goku now correctly identifies when someone replies to one of his messages.
+- **Global Triggers**: Full support for `@all`, `@goku`, and custom trigger detection.
+- **Premium ASCII UI**: High-resolution tables and clean markdown rendering optimized for mobile viewing.
+
+---
 
 ## 🏗️ Architecture
 
 ```mermaid
 graph TD
-    CLI[Goku CLI] --> Agent[Main Orchestrator]
-    Agent --> DEF[Departmental Pipelines]
-    Agent --> Memory[Vector Memory]
-    Agent --> Channel[WhatsApp/Telegram]
-    
-    DEF --> Health[Health Check]
-    DEF --> Implement[Implementation]
-    DEF --> Audit[Code Audit]
-    
-    Agent --> MCP[MCP Servers]
-    MCP --> Bash[Native Bash]
-    MCP --> Files[File System]
+    subgraph User_Interface
+        CLI[Goku CLI]
+        WA[WhatsApp]
+        TG[Telegram]
+    end
+
+    subgraph Orchestration_Layer
+        Agent[Goku Main Agent]
+        DEF[Departmental Evolution Flow]
+    end
+
+    subgraph Intelligence_Layer
+        Memory[Vector Multi-modal Memory]
+        Passive[Passive Context Logger]
+        Scheduler[Autonomous Task Scheduler]
+    end
+
+    subgraph Extension_Layer
+        MCP[MCP Server Manager]
+        Tools[Bash / Files / Web / Spotify]
+    end
+
+    User_Interface --> Orchestration_Layer
+    Orchestration_Layer --> Intelligence_Layer
+    Orchestration_Layer --> Extension_Layer
+    Intelligence_Layer --> Passive
+    Intelligence_Layer --> Scheduler
 ```
 
-## 🛠️ Setup & Installation
+---
 
-### 1. One-Liner Installation
+## 🛠️ Quick Start
+
+### 1. One-Liner Installation (Linux/macOS)
 ```bash
 curl -sSL https://raw.githubusercontent.com/elvisthebuilder/gokuu/main/install.sh | bash
 ```
 
-### 2. Configuration (.env)
-After installation, Goku creates a `.env` file in the root. Configure your essential keys:
-- `GEMINI_API_KEY`: Required for intelligence and multimodal memory.
-- `TELEGRAM_BOT_TOKEN`: Your bot token from [@BotFather](https://t.me/botfather).
-- `GOKU_OWNER_NUMBER`: Your phone number (e.g., `233...`) to authorize management commands.
-- `WHATSAPP_GROUP_POLICY`: Set to `mentions` (default) or `all`.
+### 2. Connect Your Channels
+```bash
+goku setup
+```
+Follow the wizard to link your **WhatsApp (via QR)**, **Telegram (via BotFather)**, and your preferred AI brain (**OpenAI, Anthropic, Gemini, or Ollama**).
 
-### 3. Channel Linking
-- **Telegram**: Simply start your bot after setting the token.
-- **WhatsApp**: Run `goku start`. Check the logs with `goku logs` or look in `uploads/whatsapp_qr.png` to scan the QR code with your phone.
+---
 
-> [!NOTE]
-> Make sure `~/.local/bin` is in your `PATH`. If not, add `export PATH="$PATH:$HOME/.local/bin"` to your `.bashrc` or `.zshrc`.
+## ⌨️ Command Reference
 
-## ⌨️ How to Use
+<details>
+<summary><b>View All Commands</b></summary>
 
-### Global Commands
-- `goku cli`      - Start the interactive terminal agent
-- `goku web`      - Launch the high-fidelity web dashboard
-- `goku logs`     - View diagnostic logs (WhatsApp/Telegram activity)
-- `goku channel logs` - View filtered bot-specific logs
-- `goku update`   - Pull the latest version and re-install
-- `goku start`    - Start the background bots (Gateway)
-- `goku stop`     - Stop the background bots
-- `goku status`   - Check background bot status
+| Command | Description |
+| :--- | :--- |
+| `goku chat` | Open the interactive 3.0 terminal session |
+| `goku logs` | View the main system audit logs |
+| `goku channel logs` | Real-time debug logs for WhatsApp/Telegram |
+| `goku persona` | Interactive wizard to switch or create AI personalities |
+| `goku update` | Sync everything to the latest v3.0 stable build |
+| `goku start/stop` | Manage the background Gateway daemon |
 
-### 🤖 Intelligent Features
-- **Persona Management**: Send `/persona` in any chat to interactively create or switch Goku's personality (e.g., "Senior Dev", "Life Coach").
-- **Autonomous Scheduling**: As the "Boss," tell Goku: *"Every day at 8 AM, give a dynamic Good Morning message in this group."*
-- **Memory Recall**: Goku automatically indexes shared images and documents. Ask him: *"What was in that architecture diagram I sent yesterday?"*
-- **Departmental Flow**: For complex tasks, Goku will automatically spawn sub-agents (Health, Audit, Implement) to ensure high-quality execution.
+</details>
 
+---
 
-## 🛡️ Security & Safety
-Goku is designed with a **Safety First** approach:
-- **Thought Transparency**: See exactly why the agent is taking an action in real-time.
-- **Local Control**: Runs natively in your environment without external containers (except for memory).
-- **Human-in-the-Loop**: Interactive confirmation for sensitive tool executions.
+## 👔 Professional Guidelines
 
-## 🛠️ Troubleshooting
+To maximize Goku's high-fidelity capabilities, we recommend:
+1. **Explicit Scheduling**: Give specific time-frames (e.g., "Every Friday at 4 PM, audit the `/src` folder").
+2. **Persona Alignment**: Use `/persona` to switch to a *Senior Architect* for code reviews or *DevOps Lead* for infrastructure.
+3. **Owner Security**: Always set your Owner Number in `goku config` to prevent unauthorized scheduling in public groups.
 
-### Docker Permissions
-If you see a `permission denied` error when starting Goku, it's likely because your user doesn't have permission to manage Docker containers. You can resolve this by:
-1. Adding your user to the `docker` group: `sudo usermod -aG docker $USER`
-2. Applying the changes: `newgrp docker`
+---
 
-Alternatively, Goku will automatically prompt for `sudo` if it detects a permission issue.
-
-## 🤝 Contributing
-We welcome contributions! Please follow the standard fork and pull request workflow.
+<div align="center">
+  Built with ❤️ by [Elvisthebuilder](https://github.com/elvisthebuilder) and the Goku Community.
+  
+  [Report a Bug](https://github.com/elvisthebuilder/gokuu/issues) • [Request a Feature](https://github.com/elvisthebuilder/gokuu/discussions)
+</div>
