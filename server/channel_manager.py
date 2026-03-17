@@ -126,7 +126,12 @@ class ChannelBroker:
         # Track attachments
         if attachment_path:
             req["attachments"].append(attachment_path)
-            req["full_query"] += f" [File Received: {attachment_path}]"
+            # Use specific tags to help the agent's native parsers
+            ext = os.path.splitext(attachment_path)[1].lower()
+            if ext in [".jpg", ".jpeg", ".png", ".webp", ".heic"]:
+                req["full_query"] += f" [Photo Received: {attachment_path}]"
+            else:
+                req["full_query"] += f" [File Received: {attachment_path}]"
         
         # Update voice status
         if is_voice:

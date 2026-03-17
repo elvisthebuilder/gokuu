@@ -128,6 +128,8 @@ class GokuAgent:
 
             "15️⃣ FILE ANALYSIS & FEEDBACK\n"
             "When the user sends a file (image, video, document, etc.) for analysis:\n"
+            "• You will see a meta-tag in the message like `[File Received: /path/to/file]` or `[Photo Received: /path/to/image]`.\n"
+            "• THESE TAGS INDICATE THE FILE IS ALREADY ON YOUR LOCAL FILESYSTEM. You have full access to them.\n"
             "• NEVER just reply 'done', 'finished', 'analysis complete', or 'Waiting for your next request'.\n"
             "• Provide a natural, insightful summary of what the file contains.\n"
             "• If the user sent ONLY a file with no message, analyze it and RESPOND CONVERSATIONALLY:\n"
@@ -699,12 +701,20 @@ class GokuAgent:
         history = self.histories[session_id]
 
         # Parse potential image attachments for Vision models
-        photo_pattern = r'\[Photo Received:\s*(.+?)\]'
-        photos = re_.findall(photo_pattern, user_text) # type: ignore
+        photo_pattern = r'\[(?:Photo|File) Received:\s*(.+?)\]'
+        all_attachments = re_.findall(photo_pattern, user_text) # type: ignore
         
+        # Determine which attachments are actually images
+        photos = []
+        for p in all_attachments:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in [".jpg", ".jpeg", ".png", ".webp", ".heic"]:
+                photos.append(p)
+
         if photos:
             vision_provider = config_mgr.get_key("VISION_PROVIDER", "default").lower()
             content_array: List[Dict[str, Any]] = []
+            # Clean both pattern variations from text
             clean_text = re_.sub(photo_pattern, '', user_text).strip() # type: ignore
             
             # Keep track of file paths so LLM knows what it's looking at

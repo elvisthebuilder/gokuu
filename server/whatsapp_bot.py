@@ -161,12 +161,14 @@ class WhatsAppBot:
                             if group_policy == "disabled" or (group_policy == "allowlist" and sender_ph not in allow_list and "*" not in allow_raw): return
                     
                     msg = message.Message
-                    text, attachment_path, is_voice, m_type = "", None, False, None
+                    text, attachment_path, is_voice, m_type, original_filename = "", None, False, None, ""
                     if hasattr(msg, "conversation") and msg.conversation: text = msg.conversation
                     elif hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage: text = msg.extendedTextMessage.text
                     elif hasattr(msg, "imageMessage") and msg.imageMessage: text, m_type = msg.imageMessage.caption, "image"
                     elif hasattr(msg, "videoMessage") and msg.videoMessage: text, m_type = msg.videoMessage.caption, "video"
-                    elif hasattr(msg, "documentMessage") and msg.documentMessage: text, m_type = msg.documentMessage.caption, "document"
+                    elif hasattr(msg, "documentMessage") and msg.documentMessage:
+                        text, m_type = msg.documentMessage.caption, "document"
+                        original_filename = getattr(msg.documentMessage, "fileName", "")
                     elif hasattr(msg, "audioMessage") and msg.audioMessage: m_type, is_voice = "audio", msg.audioMessage.ptt
                     elif hasattr(msg, "stickerMessage") and msg.stickerMessage: m_type = "sticker"
 
@@ -177,10 +179,23 @@ class WhatsAppBot:
                             if b:
                                 ts = time.strftime("%Y%m%d_%H%M%S")
                                 ext = {"image": ".jpg", "video": ".mp4", "audio": ".ogg", "document": ".bin", "sticker": ".webp"}.get(m_type, ".bin")
-                                if m_type == "document" and hasattr(msg.documentMessage, "mimetype"):
-                                    mt = msg.documentMessage.mimetype
-                                    if "/" in mt: ext = "." + mt.split("/")[-1]
-                                attachment_path = os.path.join("uploads", f"wa_{m_type}_{ts}{ext}")
+                                
+                                # Improve extension for documents
+                                if m_type == "document":
+                                    if original_filename and "." in original_filename:
+                                        ext = os.path.splitext(original_filename)[1]
+                                    elif hasattr(msg.documentMessage, "mimetype"):
+                                        mt = msg.documentMessage.mimetype
+                                        if "/" in mt: ext = "." + mt.split("/")[-1]
+                                
+                                base_name = f"wa_{m_type}_{ts}"
+                                if original_filename:
+                                    # Clean filename for filesystem
+                                    safe_name = "".join([c if c.isalnum() or c in "._-" else "_" for c in original_filename])
+                                    base_name = f"wa_{ts}_{safe_name}"
+                                    ext = "" # extension is already in safe_name
+                                    
+                                attachment_path = os.path.join("uploads", f"{base_name}{ext}")
                                 os.makedirs("uploads", exist_ok=True)
                                 with open(attachment_path, "wb") as f: f.write(b)
                         except Exception as e: logger.error(f"Download error: {e}")
