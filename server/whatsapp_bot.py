@@ -325,16 +325,16 @@ class WhatsAppBot:
             # Convert string JID to JID object for reliability (especially for groups)
             if "@" in chat_jid:
                 user, server = chat_jid.split("@", 1)
-                target_jid = JID(User=user, Server=server, RawAgent=0, Device=0, Integrator=0)
+                target_jid = JID(User=user, Server=server)
             else:
-                target_jid = JID(User=chat_jid, Server="s.whatsapp.net", RawAgent=0, Device=0, Integrator=0)
+                target_jid = JID(User=chat_jid, Server="s.whatsapp.net")
 
             # Send typing status before message (Instant delivery, but feels natural)
             try:
                 self.client.send_chat_presence(target_jid, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
             except: pass
 
-            self.client.send_message(target_jid, WAMessage(conversation=format_for_whatsapp(text)))
+            self.client.send_message(target_jid, text)
             logger.info(f"Direct WA message sent to {chat_jid} (JID Object: {target_jid})")
         except Exception as e: logger.error(f"Direct send error to {chat_jid}: {e}", exc_info=True)
 
