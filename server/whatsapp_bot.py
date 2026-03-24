@@ -24,7 +24,8 @@ class WhatsAppBot:
         self.main_loop: Optional[asyncio.AbstractEventLoop] = None
         self.db_path = os.path.join("server", "whatsapp_session.db")
         self.bot_lid_user = ""
-        self._group_info_cache: Dict[str, str] = {} # {jid: name}
+        self._group_info_cache: Dict[str, Any] = {} # {jid: GroupInfo}
+        self._last_group_refresh: Dict[str, float] = {} # {jid: timestamp}
 
     def _qr_callback(self, client: NewClient, qr: bytes):
         """Called when a new QR code is generated."""
@@ -147,6 +148,29 @@ class WhatsAppBot:
 
                     sender_jid = safe_get_jid(src.Sender) if is_group else chat_jid
                     sender_ph = get_phone_from_jid(sender_jid)
+                    sender_name = getattr(message.Info, "Pushname", "") or "Unknown"
+                    sender_role = "Member"
+                    
+                    if is_group:
+                        # Try to resolve group role (Admin/Member)
+                        now = time.time()
+                        if chat_jid not in self._group_info_cache or now - self._last_group_refresh.get(chat_jid, 0) > 300:
+                            try:
+                                g_info = c.get_group_info(raw_chat)
+                                if g_info:
+                                    self._group_info_cache[chat_jid] = g_info
+                                    self._last_group_refresh[chat_jid] = now
+                            except: pass
+                        
+                        g_info = self._group_info_cache.get(chat_jid)
+                        if g_info and hasattr(g_info, "Participants"):
+                            for p in g_info.Participants:
+                                p_jid = f"{p.JID.User}@{p.JID.Server}"
+                                if p_jid == sender_jid or p_jid == sender_ph + "@s.whatsapp.net":
+                                    if getattr(p, "IsAdmin", False) or getattr(p, "IsSuperAdmin", False):
+                                        sender_role = "Admin"
+                                    break
+
                     if "@lid" in sender_jid:
                         if hasattr(src, "SenderPn") and src.SenderPn.User: sender_ph = src.SenderPn.User
                         elif hasattr(src, "SenderAlt") and src.SenderAlt:
@@ -253,7 +277,10 @@ class WhatsAppBot:
                             except: pass
                             try: c.send_chat_presence(raw_chat, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
                             except: pass
-                            p_text = text
+                            
+                            # Identity Awareness: Prefix message with sender details
+                            p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}" if text else f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
+                            
                             if is_voice and attachment_path:
                                 from .speech_service import transcribe_audio # type: ignore
                                 transcript = await transcribe_audio(attachment_path)
@@ -316,11 +343,11 @@ class WhatsAppBot:
             logger.error(f"Failed to start WhatsApp: {e}")
 
     async def send_message_direct(self, chat_jid: str, text: str):
-        """Send direct proactive message."""
+        """Send direct proactive message with automatic mention support."""
         if not self.client or not self.is_connected: return
         try:
-            from server.whatsapp_formatter import format_for_whatsapp # type: ignore
-            from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as WAMessage # type: ignore
+            import re
+            from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as WAMessage, ExtendedTextMessage, ContextInfo # type: ignore
             
             # Convert string JID to JID object for reliability (especially for groups)
             if "@" in chat_jid:
@@ -334,8 +361,24 @@ class WhatsAppBot:
                 self.client.send_chat_presence(target_jid, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
             except: pass
 
-            self.client.send_message(target_jid, text)
-            logger.info(f"Direct WA message sent to {chat_jid} (JID Object: {target_jid})")
+            # Automatic Mentions: Parse @123456789 in the text
+            mention_regex = r"@(\d{7,15})"
+            mentions = re.findall(mention_regex, text)
+            
+            if mentions:
+                # Deduplicate and format as JIDs
+                unique_mentions = list(set([m + "@s.whatsapp.net" for m in mentions]))
+                
+                # Wrap in ExtendedTextMessage to support mentionedJid
+                ctx = ContextInfo(mentionedJID=unique_mentions)
+                ext_msg = ExtendedTextMessage(text=text, contextInfo=ctx)
+                msg_obj = WAMessage(extendedTextMessage=ext_msg)
+                self.client.send_message(target_jid, msg_obj)
+            else:
+                # No mentions, use simple string (highest compatibility)
+                self.client.send_message(target_jid, text)
+                
+            logger.info(f"Direct WA message sent to {chat_jid} (Mentions: {len(mentions)})")
         except Exception as e: logger.error(f"Direct send error to {chat_jid}: {e}", exc_info=True)
 
     def logout(self):
