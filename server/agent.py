@@ -1133,10 +1133,11 @@ class GokuAgent:
             loop_data = self.session_loop_data[session_id]
             if not final_tool_calls:
                 if turn == 0: 
-                    if self.session_reacted.get(session_id):
-                        # Agent chose to react only, don't send default text
+                    if self.session_reacted.get(session_id) and not clean_content:
+                        # Agent chose to react only, don't send text
                         break
-                    yield {"type": "message", "role": "agent", "content": "_[Agent finished turn]_"}
+                    if clean_content:
+                        yield {"type": "message", "role": "agent", "content": clean_content}
                     break
                 else:
                     if "?" in clean_content or (hasattr(self, "pending_hashes") and self.pending_hashes):
