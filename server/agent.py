@@ -1132,17 +1132,11 @@ class GokuAgent:
 
             loop_data = self.session_loop_data[session_id]
             if not final_tool_calls:
-                if turn == 0 or not clean_content:
-                    if clean_content: yield {"type": "message", "role": "agent", "content": clean_content}
-                    elif turn == 0: 
-                        if self.session_reacted.get(session_id):
-                            # Agent chose to react only, don't send default text
-                            break
-                        yield {"type": "message", "role": "agent", "content": "_[System: Empty response]_"}
-                    else: 
-                        if self.session_reacted.get(session_id):
-                            break
-                        yield {"type": "message", "role": "agent", "content": "Task complete!"}
+                if turn == 0: 
+                    if self.session_reacted.get(session_id):
+                        # Agent chose to react only, don't send default text
+                        break
+                    yield {"type": "message", "role": "agent", "content": "_[Agent finished turn]_"}
                     break
                 else:
                     if "?" in clean_content or (hasattr(self, "pending_hashes") and self.pending_hashes):
@@ -1151,8 +1145,6 @@ class GokuAgent:
                     
                     if clean_content: yield {"type": "thought", "content": clean_content}
                     
-                    # If we've already reacted, we're likely done and just being polite/chatty.
-                    # Don't force a tool call if we've already acknowledged the message.
                     if self.session_reacted.get(session_id):
                         break
 
@@ -1166,9 +1158,7 @@ class GokuAgent:
             else:
                 loop_data["narration_retries"] = 0
                 if "count" in loop_data: loop_data["count"] = 0
-                # We intentionally do NOT yield `clean_content` as a `message` here if tools are present for sub-agents.
-                # LLMs often output conversational filler like "Let me scan this file now..." before the JSON.
-                # We yield it as a thought instead, so it is logged but not sent to the end-user.
+                
                 if self.is_sub_agent:
                     if clean_content: yield {"type": "thought", "content": f"Agent pre-tool text: {clean_content}"}
                 else:

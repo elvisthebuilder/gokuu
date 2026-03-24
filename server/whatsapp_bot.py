@@ -223,8 +223,27 @@ class WhatsAppBot:
                                 ml = self.main_loop
                                 if ml is not None and not ml.is_closed():
                                     from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
-                                    asyncio.run_coroutine_threadsafe(memory.add_memory(text=f"[Passive Record] {text or f'<{m_type}>'}", persona_name=GOKU_DEFAULT_PERSONA, metadata={"sender": sender_ph, "group": chat_jid, "passive": True}), ml)
-                            except: pass
+                                    from server.personality_manager import personality_manager # type: ignore
+                                    
+                                    # Resolve the persona assigned to this group/chat for correct memory scoping
+                                    assigned_persona = None
+                                    try:
+                                        # mappings: {source:persona, source:session:persona}
+                                        mappings = personality_manager.get_all_mappings()
+                                        assigned_persona = mappings.get(f"whatsapp:{chat_jid}") or mappings.get("whatsapp")
+                                    except: pass
+                                    
+                                    target_persona = assigned_persona or GOKU_DEFAULT_PERSONA
+                                    
+                                    asyncio.run_coroutine_threadsafe(
+                                        memory.add_memory(
+                                            text=f"[Passive Record] {text or f'<{m_type}>'}", 
+                                            persona_name=target_persona, 
+                                            metadata={"sender": sender_ph, "group": chat_jid, "passive": True}
+                                        ), ml
+                                    )
+                                    logger.debug(f"Passive record for {target_persona} in {chat_jid}")
+                            except Exception as em: logger.debug(f"Passive log error: {em}")
                             return
 
                     session_id = f"wa_{chat_jid}"
@@ -306,9 +325,14 @@ class WhatsAppBot:
             # Convert string JID to JID object for reliability (especially for groups)
             if "@" in chat_jid:
                 user, server = chat_jid.split("@", 1)
-                target_jid = JID(User=user, Server=server)
+                target_jid = JID(User=user, Server=server, RawAgent=0, Device=0, Integrator=0)
             else:
-                target_jid = JID(User=chat_jid, Server="s.whatsapp.net")
+                target_jid = JID(User=chat_jid, Server="s.whatsapp.net", RawAgent=0, Device=0, Integrator=0)
+
+            # Send typing status before message (Instant delivery, but feels natural)
+            try:
+                self.client.send_chat_presence(target_jid, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
+            except: pass
 
             self.client.send_message(target_jid, WAMessage(conversation=format_for_whatsapp(text)))
             logger.info(f"Direct WA message sent to {chat_jid} (JID Object: {target_jid})")
