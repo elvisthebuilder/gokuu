@@ -11,6 +11,7 @@ from .channel_manager import channel_broker # type: ignore
 from .config_manager import config_manager # type: ignore
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ReactionMessage, Message, AudioMessage # type: ignore
 from neonize.proto.waCommon.WACommon_pb2 import MessageKey # type: ignore
+from neonize.utils.jid import JID # type: ignore
 
 logger = logging.getLogger("WhatsAppBot")
 
@@ -301,9 +302,17 @@ class WhatsAppBot:
         try:
             from server.whatsapp_formatter import format_for_whatsapp # type: ignore
             from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as WAMessage # type: ignore
-            self.client.send_message(chat_jid, WAMessage(conversation=format_for_whatsapp(text)))
-            logger.info(f"Direct WA message sent to {chat_jid}")
-        except Exception as e: logger.error(f"Direct send error: {e}")
+            
+            # Convert string JID to JID object for reliability (especially for groups)
+            if "@" in chat_jid:
+                user, server = chat_jid.split("@", 1)
+                target_jid = JID(User=user, Server=server)
+            else:
+                target_jid = JID(User=chat_jid, Server="s.whatsapp.net")
+
+            self.client.send_message(target_jid, WAMessage(conversation=format_for_whatsapp(text)))
+            logger.info(f"Direct WA message sent to {chat_jid} (JID Object: {target_jid})")
+        except Exception as e: logger.error(f"Direct send error to {chat_jid}: {e}", exc_info=True)
 
     def logout(self):
         """Disconnect and reset session."""
