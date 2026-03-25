@@ -84,7 +84,30 @@ class WhatsAppBot:
                     logger.error(f"Groups error: {e}")
                     return []
 
-            channel_broker.register_interface("whatsapp", send_wa_interface, list_wa_groups)
+            async def get_wa_chat_info(session_id: str) -> Dict[str, Any]:
+                jid_str = session_id.replace("wa_", "")
+                if not self.client: return {"status": "error", "message": "Client not initialized"}
+                try:
+                    user, server = jid_str.split("@", 1)
+                    target_jid = JID(User=user, Server=server)
+                    if server == "g.us":
+                        info = self.client.get_group_info(target_jid)
+                        if info:
+                            return {
+                                "status": "success",
+                                "name": info.GroupName or "Unknown Group",
+                                "participants": [{"jid": f"{p.JID.User}@{p.JID.Server}", "role": "admin" if p.IsAdmin else "member"} for p in info.Participants],
+                                "description": info.GroupDescription or ""
+                            }
+                    else:
+                        info = self.client.get_user_info([target_jid])
+                        # user_info returns a list or dict depending on version
+                        return {"status": "success", "jid": jid_str, "info": str(info)}
+                except Exception as e:
+                    return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": "Chat not found"}
+
+            channel_broker.register_interface("whatsapp", send_wa_interface, list_wa_groups, get_wa_chat_info)
 
             @client.event(ConnectedEv)
             def on_connected(c: NewClient, e: ConnectedEv): # type: ignore
@@ -365,20 +388,16 @@ class WhatsAppBot:
             mention_regex = r"@(\d{7,15})"
             mentions = re.findall(mention_regex, text)
             
-            if mentions:
-                # Deduplicate and format as JIDs
-                unique_mentions = list(set([m + "@s.whatsapp.net" for m in mentions]))
-                
-                # Wrap in ExtendedTextMessage to support mentionedJid
-                ctx = ContextInfo(mentionedJID=unique_mentions)
-                ext_msg = ExtendedTextMessage(text=text, contextInfo=ctx)
-                msg_obj = WAMessage(extendedTextMessage=ext_msg)
-                self.client.send_message(target_jid, msg_obj)
+            # ghost_mentions in neonize expects a comma-separated string of JIDs (or a single JID)
+            # We'll provide it to ensure the protocol handles the mention properly.
+            ghost_mentions_str = ",".join(list(set([m + "@s.whatsapp.net" for m in mentions]))) if mentions else None
+            
+            # Using ghost_mentions with a raw string is the most stable path in neonize
+            res = self.client.send_message(target_jid, text, ghost_mentions=ghost_mentions_str)
+            if res:
+                logger.info(f"Direct WA message sent to {chat_jid} (Mentions: {len(mentions)}, Result: {res})")
             else:
-                # No mentions, use simple string (highest compatibility)
-                self.client.send_message(target_jid, text)
-                
-            logger.info(f"Direct WA message sent to {chat_jid} (Mentions: {len(mentions)})")
+                logger.warning(f"Direct WA message to {chat_jid} returned empty response (potential silent failure)")
         except Exception as e: logger.error(f"Direct send error to {chat_jid}: {e}", exc_info=True)
 
     def logout(self):

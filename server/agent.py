@@ -1,4 +1,5 @@
 import json
+import time
 from server.config_manager import config_manager as config_mgr # type: ignore
 import logging
 import asyncio
@@ -900,11 +901,50 @@ class GokuAgent:
                 "type": "function",
                 "function": {
                     "name": "list_groups",
-                    "description": "List all groups the bot is currently a member of on the current platform (WhatsApp/Telegram). Returns a list with 'name', 'jid', and 'session_id' for each group. Use the 'jid' field with send_message to target a specific group.",
+                    "description": "List all groups the bot is currently a member of. Returns a list with 'name', 'jid', and 'session_id'. Use 'jid' for other tools.",
                     "parameters": {
                         "type": "object",
                         "properties": {},
                         "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch_chat_history",
+                    "description": "Fetch the most recent messages from a specific group or chat. Use this to understand the current discussion. Supports JID or group name (e.g. '@General').",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target": {
+                                "type": "string",
+                                "description": "The JID (e.g. '120363...@g.us') or name (e.g. '@General') of the chat to fetch."
+                            },
+                            "count": {
+                                "type": "integer",
+                                "description": "Number of recent messages to fetch (default 10).",
+                                "default": 10
+                            }
+                        },
+                        "required": ["target"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_chat_details",
+                    "description": "Get detailed info about a chat, including participants and description. Supports JID or group name.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target": {
+                                "type": "string",
+                                "description": "The JID or group name to inspect."
+                            }
+                        },
+                        "required": ["target"]
                     }
                 }
             },
@@ -1276,6 +1316,78 @@ class GokuAgent:
                     
                     result = {"status": "success", "groups": safe_groups}
                     
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                elif tool_name == "fetch_chat_history":
+                    from server.channel_manager import channel_broker # type: ignore
+                    from server.memory import memory # type: ignore
+                    target = tool_args.get("target")
+                    count = tool_args.get("count", 10)
+                    if not target:
+                        result = {"status": "error", "message": "Missing 'target' for history fetch."}
+                    else:
+                        # Resolve target (handle @Name fuzzy match)
+                        target_jid = target
+                        if target.startswith("@"):
+                            groups = await channel_broker.get_groups(source)
+                            search_name = target[1:].lower().strip()
+                            best_match = None
+                            for g in groups:
+                                name = str(g.get("name", "")).lower()
+                                if search_name in name or name in search_name:
+                                    best_match = g.get("jid")
+                                    break
+                            if best_match: target_jid = best_match
+                            else:
+                                result = {"status": "error", "message": f"Could not find group matching '{target}'"}
+                                self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                                continue
+                        
+                        # Use current persona if available for memory scope
+                        active_persona = GOKU_DEFAULT_PERSONA
+                        try:
+                            from server.personality_manager import personality_manager # type: ignore
+                            mappings = personality_manager.get_all_mappings()
+                            # Use session_id to resolve jid if not explicitly provided
+                            current_jid = session_id.replace('wa_', '')
+                            active_persona = mappings.get(f"whatsapp:{current_jid}") or mappings.get("whatsapp") or GOKU_DEFAULT_PERSONA
+                        except: pass
+                        
+                        history = await memory.get_recent_messages(target_jid, limit=count, persona_name=active_persona)
+                        formatted_history = []
+                        for h in history:
+                            ts = h.get("timestamp", 0)
+                            meta = h.get("metadata", {})
+                            sender = meta.get("sender", "Unknown")
+                            text = h.get("text", "")
+                            time_str = time.strftime('%H:%M', time.localtime(ts))
+                            formatted_history.append(f"[{time_str}] {sender}: {text}")
+                        
+                        result = {"status": "success", "history": formatted_history, "jid": target_jid}
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                elif tool_name == "get_chat_details":
+                    from server.channel_manager import channel_broker # type: ignore
+                    target = tool_args.get("target")
+                    if not target:
+                        result = {"status": "error", "message": "Missing 'target' for chat details."}
+                    else:
+                        target_jid = target
+                        if target.startswith("@"):
+                            groups = await channel_broker.get_groups(source)
+                            search_name = target[1:].lower().strip()
+                            best_match = None
+                            for g in groups:
+                                name = str(g.get("name", "")).lower()
+                                if search_name in name or name in search_name:
+                                    best_match = g.get("jid")
+                                    break
+                            if best_match: target_jid = best_match
+                            else:
+                                result = {"status": "error", "message": f"Could not find group matching '{target}'"}
+                                self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                                continue
+                        
+                        info = await channel_broker.get_chat_info(source, target_jid)
+                        result = info
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "send_message":
                     from server.channel_manager import channel_broker # type: ignore

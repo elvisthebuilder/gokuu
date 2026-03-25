@@ -194,6 +194,48 @@ class VectorMemory:
             logger.error(f"Memory Error (search) [{persona_name}]: {e}")
             return []
 
+    async def get_recent_messages(
+        self,
+        jid: str,
+        limit: int = 20,
+        persona_name: str = GOKU_DEFAULT_PERSONA
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch the most recent messages for a specific chat/group JID chronologically.
+        Uses Qdrant scroll with metadata filters.
+        """
+        if not self.online:
+            return []
+
+        collection_name = _safe_collection_name(persona_name)
+        if collection_name not in self._known_collections:
+            return []
+
+        try:
+            # Use scroll to fetch points filtered by metadata.group
+            results, _ = self.client.scroll(
+                collection_name=collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="metadata.group",
+                            match=models.MatchValue(value=jid),
+                        )
+                    ]
+                ),
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+            
+            # Sort by timestamp descending (newest first)
+            payloads = [getattr(r, 'payload', {}) for r in results if hasattr(r, 'payload')]
+            sorted_payloads = sorted(payloads, key=lambda x: x.get("timestamp", 0), reverse=True)
+            return sorted_payloads
+        except Exception as e:
+            logger.error(f"Memory Error (scroll) [{persona_name}]: {e}")
+            return []
+
 
 def _extract_file_text(file_path: str) -> str:
     """Extract plain text from supported file types for embedding."""

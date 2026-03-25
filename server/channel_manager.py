@@ -19,11 +19,12 @@ class ChannelBroker:
         # {source_name: {"send": send_fn, "list_groups": list_fn}}
         self._interfaces: Dict[str, Dict[str, Any]] = {}
 
-    def register_interface(self, source: str, send_fn: Callable[[str, str], Awaitable[Any]], group_lister: Optional[Callable[[], Awaitable[List[Dict[str, str]]]]] = None):
-        """Register a bot's sending and listing capabilities."""
+    def register_interface(self, source: str, send_fn: Callable[[str, str], Awaitable[Any]], group_lister: Optional[Callable[[], Awaitable[List[Dict[str, str]]]]] = None, info_lister: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None):
+        """Register a bot's sending, listing, and info-fetching capabilities."""
         self._interfaces[source] = {
             "send": send_fn,
-            "list_groups": group_lister
+            "list_groups": group_lister,
+            "get_chat_info": info_lister
         }
         logger.info(f"Registered interface for {source}")
 
@@ -34,6 +35,14 @@ class ChannelBroker:
             if lister:
                 return await lister()
         return []
+
+    async def get_chat_info(self, source: str, jid: str) -> Dict[str, Any]:
+        """Fetch detailed info for a specific chat/group."""
+        if source in self._interfaces:
+            lister = self._interfaces[source].get("get_chat_info")
+            if lister:
+                return await lister(jid)
+        return {"status": "error", "message": f"Info fetching not supported for {source}"}
 
     async def send_message(self, source: str, jid: str, text: str) -> bool:
         """Send a message to a specific JID (user or group) via the registered source interface."""
