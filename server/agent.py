@@ -774,6 +774,11 @@ class GokuAgent:
                         logger.error(f"Failed to load image for vision: {e}")
                         content_array.append({"type": "text", "text": f"[Error loading image: {path}]"})
             
+            # Add placeholders for non-image attachments so the agent knows they exist
+            others = [p for p in all_attachments if p not in photos]
+            for p in others:
+                content_array.append({"type": "text", "text": f"[File Received: {p}] (Use document parsing tools to read this)"})
+            
             history.append({"role": "user", "content": content_array})
         else:
             history.append({"role": "user", "content": user_text})
@@ -1345,7 +1350,6 @@ class GokuAgent:
                         # Use current persona if available for memory scope
                         active_persona = GOKU_DEFAULT_PERSONA
                         try:
-                            from server.personality_manager import personality_manager # type: ignore
                             mappings = personality_manager.get_all_mappings()
                             # Use session_id to resolve jid if not explicitly provided
                             current_jid = session_id.replace('wa_', '')

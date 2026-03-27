@@ -12,6 +12,8 @@ from .config_manager import config_manager # type: ignore
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ReactionMessage, Message, AudioMessage # type: ignore
 from neonize.proto.waCommon.WACommon_pb2 import MessageKey # type: ignore
 from neonize.utils.jid import JID # type: ignore
+from .personality_manager import personality_manager # type: ignore
+from .memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
 
 logger = logging.getLogger("WhatsAppBot")
 
@@ -248,66 +250,70 @@ class WhatsAppBot:
                                 with open(attachment_path, "wb") as f: f.write(b)
                         except Exception as e: logger.error(f"Download error: {e}")
 
-                    mentioned = not is_group or is_self_chat
-                    if is_group and not mentioned:
-                        proto_m, reply_m, ctx = False, False, None
-                        if hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage.contextInfo: ctx = msg.extendedTextMessage.contextInfo
-                        elif hasattr(msg, "imageMessage") and msg.imageMessage.contextInfo: ctx = msg.imageMessage.contextInfo
-                        elif hasattr(msg, "videoMessage") and msg.videoMessage.contextInfo: ctx = msg.videoMessage.contextInfo
-                        elif hasattr(msg, "documentMessage") and msg.documentMessage.contextInfo: ctx = msg.documentMessage.contextInfo
-                        if ctx:
-                            if hasattr(ctx, "mentionedJid") and ctx.mentionedJid:
-                                for mjid in ctx.mentionedJid:
-                                    if (bot_phone and bot_phone in mjid) or (self.bot_lid_user and self.bot_lid_user in mjid): proto_m = True; break
-                            if hasattr(ctx, "participant") and ctx.participant:
-                                q_jid = safe_get_jid(ctx.participant)
-                                if (bot_phone and bot_phone in q_jid) or (self.bot_lid_user and self.bot_lid_user in q_jid): reply_m = True
-                        text_l = (text or "").lower()
-                        text_m = "goku" in text_l or "@all" in text_l or (bot_phone and bot_phone in text_l) or (self.bot_lid_user and self.bot_lid_user in text_l)
-                        mentioned = proto_m or reply_m or text_m or (is_voice and is_owner)
-                        if not mentioned:
-                            try:
-                                ml = self.main_loop
-                                if ml is not None and not ml.is_closed():
-                                    from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
-                                    from server.personality_manager import personality_manager # type: ignore
-                                    
-                                    # Resolve the persona assigned to this group/chat for correct memory scoping
-                                    assigned_persona = None
-                                    try:
-                                        # mappings: {source:persona, source:session:persona}
-                                        mappings = personality_manager.get_all_mappings()
-                                        assigned_persona = mappings.get(f"whatsapp:{chat_jid}") or mappings.get("whatsapp")
-                                    except: pass
-                                    
-                                    target_persona = assigned_persona or GOKU_DEFAULT_PERSONA
-                                    
-                                    asyncio.run_coroutine_threadsafe(
-                                        memory.add_memory(
-                                            text=f"[Passive Record] {text or f'<{m_type}>'}", 
-                                            persona_name=target_persona, 
-                                            metadata={"sender": sender_ph, "group": chat_jid, "passive": True}
-                                        ), ml
-                                    )
-                                    logger.debug(f"Passive record for {target_persona} in {chat_jid}")
-                            except Exception as em: logger.debug(f"Passive log error: {em}")
-                            return
-
                     session_id = f"wa_{chat_jid}"
+                    mentioned = not is_group or is_self_chat
+                    p_text = ""
+                    lu = self.bot_lid_user
+                    
                     async def async_delegate():
+                        nonlocal text, mentioned, p_text
                         try:
+                            # 1. Transcribe if voice
+                            if is_voice and attachment_path:
+                                from .speech_service import transcribe_audio # type: ignore
+                                transcript = await transcribe_audio(attachment_path)
+                                if transcript:
+                                    text = (text + " " + transcript).strip()
+                            
+                            # 2. Complete Mention Logic (now that we have transcript for voice)
+                            if is_group and not mentioned:
+                                proto_m, reply_m, ctx = False, False, None
+                                if hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage.contextInfo: ctx = msg.extendedTextMessage.contextInfo
+                                elif hasattr(msg, "imageMessage") and msg.imageMessage.contextInfo: ctx = msg.imageMessage.contextInfo
+                                elif hasattr(msg, "videoMessage") and msg.videoMessage.contextInfo: ctx = msg.videoMessage.contextInfo
+                                elif hasattr(msg, "documentMessage") and msg.documentMessage.contextInfo: ctx = msg.documentMessage.contextInfo
+                                
+                                if ctx:
+                                    if hasattr(ctx, "mentionedJid") and ctx.mentionedJid:
+                                        for mjid in ctx.mentionedJid:
+                                            if (bot_phone and bot_phone in mjid) or (lu and lu in mjid): proto_m = True; break
+                                    if hasattr(ctx, "participant") and ctx.participant:
+                                        q_jid = safe_get_jid(ctx.participant)
+                                        if (bot_phone and bot_phone in q_jid) or (lu and lu in q_jid): reply_m = True
+                                
+                                text_l = (text or "").lower()
+                                text_m = "goku" in text_l or "@all" in text_l or (bot_phone and bot_phone in text_l) or (lu and lu in text_l)
+                                mentioned = proto_m or reply_m or text_m or (is_voice and is_owner)
+
+                            # 3. Identity Awareness: Prefix message with sender details
+                            p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}" if text else f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
+                            if is_group:
+                                p_text = f"[FROM: {sender_name}]: {p_text}"
+
+                            # 4. If still not mentioned, just record to memory and exit
+                            if not mentioned:
+                                # Resolve the persona assigned to this group/chat for correct memory scoping
+                                assigned_persona = None
+                                try:
+                                    mappings = personality_manager.get_all_mappings()
+                                    assigned_persona = mappings.get(f"whatsapp:{chat_jid}") or mappings.get("whatsapp")
+                                except: pass
+                                
+                                target_persona = assigned_persona or GOKU_DEFAULT_PERSONA
+                                await memory.add_memory(
+                                    text=f"[Passive Record] {text or f'<{m_type}>'}", 
+                                    persona_name=target_persona, 
+                                    metadata={"sender": sender_ph, "group": chat_jid, "passive": True}
+                                )
+                                logger.debug(f"Passive record for {target_persona} in {chat_jid}")
+                                return
+
+                            # 5. Handle the interaction
                             try: c.mark_read(message.Info.ID, chat=raw_chat, sender=message.Info.MessageSource.Sender if is_group else raw_chat, receipt=ReceiptType.READ)
                             except: pass
                             try: c.send_chat_presence(raw_chat, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
                             except: pass
                             
-                            # Identity Awareness: Prefix message with sender details
-                            p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}" if text else f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
-                            
-                            if is_voice and attachment_path:
-                                from .speech_service import transcribe_audio # type: ignore
-                                transcript = await transcribe_audio(attachment_path)
-                                if transcript: p_text = (text + " " + transcript).strip()
                             if not p_text and not attachment_path: return
 
                             async def send_wa(resp: str):
@@ -319,6 +325,7 @@ class WhatsAppBot:
                                         rp = os.path.join("uploads", f"wa_r_{ts}.mp3")
                                         if await generate_speech(resp, rp):
                                             with open(rp, "rb") as af: b = af.read()
+                                            # Use audio/ogg; codecs=opus for better compatibility if possible, but mpeg is fine for now
                                             c.send_message(raw_chat, Message(audioMessage=AudioMessage(ptt=True, mimetype="audio/mpeg", fileLength=len(b))))
                                             try: os.remove(rp)
                                             except: pass
@@ -337,10 +344,6 @@ class WhatsAppBot:
                                     key = MessageKey(remoteJID=chat_jid, fromMe=False, ID=message.Info.ID, participant=sender_jid if is_group else "")
                                     c.send_message(raw_chat, Message(reactionMessage=ReactionMessage(key=key, text=e, senderTimestampMS=int(time.time()*1000))))
                                 except: pass
-
-                            if is_group:
-                                sn = getattr(message.Info, "PushName", "") or sender_ph or "User"
-                                p_text = f"[FROM: {sn}]: {p_text}"
 
                             await channel_broker.handle_incoming_message(session_id=session_id, content=p_text, source="whatsapp", send_message_fn=send_wa, status_update_fn=status_upd, react_fn=react_wa, is_voice=is_voice, attachment_path=attachment_path, is_group=is_group)
                         except Exception as ed: logger.error(f"WA delegate error: {ed}")

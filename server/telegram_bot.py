@@ -13,6 +13,8 @@ from .agent import agent # type: ignore
 from .config_manager import config_manager # type: ignore
 from .telegram_formatter import format_for_telegram, strip_markdown, smart_chunk # type: ignore
 from .speech_service import transcribe_audio, generate_speech # type: ignore
+from .personality_manager import personality_manager # type: ignore
+from .memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
 
 # Configure uploads directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -335,9 +337,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not mentioned:
             # PASSIVE MEMORY: Record background context
             try:
-                from server.personality_manager import personality_manager # type: ignore
-                from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
-                
                 active_name = GOKU_DEFAULT_PERSONA
                 mappings = personality_manager.get_all_mappings()
                 for target_map, p_name in mappings.items():
