@@ -178,20 +178,20 @@ def _format_table_internal(table_text: str) -> str:
     if not rows: return table_text
     
     num_cols = max(len(row) for row in rows)
-    widths = [0] * num_cols
+    col_widths: List[int] = [0] * num_cols
     for row in rows:
         for i, cell in enumerate(row):
             if i < num_cols:
                 cell_len = len(cell)
-                if cell_len > widths[i]:
-                    widths[i] = cell_len
+                if cell_len > col_widths[i]:
+                    col_widths[i] = cell_len
     
     formatted_lines = []
     
     # Top border
     top = "┌"
     for j in range(num_cols):
-        top += "─" * (widths[j] + 2)
+        top += "─" * (col_widths[j] + 2)
         if j < num_cols - 1: top += "┬"
     top += "┐"
     formatted_lines.append(top)
@@ -200,7 +200,7 @@ def _format_table_internal(table_text: str) -> str:
         padded_cells = []
         for j in range(num_cols):
             val = row[j] if j < len(row) else ""
-            cw = widths[j]
+            cw = col_widths[j]
             padded_cells.append(f" {val.ljust(cw)} ")
         
         formatted_lines.append("│" + "│".join(padded_cells) + "│")
@@ -208,7 +208,7 @@ def _format_table_internal(table_text: str) -> str:
         if i == 0: # Header separator
             mid = "├"
             for j in range(num_cols):
-                mid += "─" * (widths[j] + 2)
+                mid += "─" * (col_widths[j] + 2)
                 if j < num_cols - 1: mid += "┼"
             mid += "┤"
             formatted_lines.append(mid)
@@ -216,7 +216,7 @@ def _format_table_internal(table_text: str) -> str:
     # Bottom border
     bot = "└"
     for j in range(num_cols):
-        bot += "─" * (widths[j] + 2)
+        bot += "─" * (col_widths[j] + 2)
         if j < num_cols - 1: bot += "┴"
     bot += "┘"
     formatted_lines.append(bot)

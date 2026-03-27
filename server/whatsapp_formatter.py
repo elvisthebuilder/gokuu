@@ -134,21 +134,20 @@ def _format_table_internal(table_text: str) -> str:
     if not rows: return table_text
     
     col_count = max(len(r) for r in rows)
-    # Use list for widths to avoid dict indexing lints
-    widths = [0] * col_count
+    col_widths: List[int] = [0] * col_count
     for row in rows:
         for i, cell in enumerate(row):
             if i < col_count:
                 cell_len = len(cell)
-                if cell_len > widths[i]:
-                    widths[i] = cell_len
+                if cell_len > col_widths[i]:
+                    col_widths[i] = cell_len
     
     formatted = []
     
     # Top border
     top = "┌"
     for j in range(col_count):
-        top += "─" * (widths[j] + 2)
+        top += "─" * (col_widths[j] + 2)
         if j < col_count - 1: top += "┬"
     top += "┐"
     formatted.append(top)
@@ -157,15 +156,15 @@ def _format_table_internal(table_text: str) -> str:
         padded = []
         for j in range(col_count):
             val = row[j] if j < len(row) else ""
-            w = widths[j]
-            padded.append(f" {val.ljust(w)} ")
+            cw = col_widths[j]
+            padded.append(f" {val.ljust(cw)} ")
         
         formatted.append("│" + "│".join(padded) + "│")
         
         if i == 0: # Header separator
             mid = "├"
             for j in range(col_count):
-                mid += "─" * (widths[j] + 2)
+                mid += "─" * (col_widths[j] + 2)
                 if j < col_count - 1: mid += "┼"
             mid += "┤"
             formatted.append(mid)
@@ -173,7 +172,7 @@ def _format_table_internal(table_text: str) -> str:
     # Bottom border
     bot = "└"
     for j in range(col_count):
-        bot += "─" * (widths[j] + 2)
+        bot += "─" * (col_widths[j] + 2)
         if j < col_count - 1: bot += "┴"
     bot += "┘"
     formatted.append(bot)
