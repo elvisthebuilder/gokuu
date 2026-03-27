@@ -4,7 +4,7 @@ import os
 import re as re_
 from typing import Dict, Any, List, Optional, Callable, Awaitable
 from datetime import datetime
-from .agent import agent # type: ignore
+# from .agent import agent # Removed to fix circular import
 
 logger = logging.getLogger("ChannelManager")
 
@@ -214,6 +214,7 @@ class ChannelBroker:
             # 2. Run Agent
             response_text: str = ""
             current_buffer: str = ""
+            from server.agent import agent # type: ignore
             gen = agent.run_agent(full_query, source=source, session_id=session_id, react_fn=react_fn, is_group=is_group_chat)
             
             try:
