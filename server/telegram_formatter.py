@@ -11,7 +11,8 @@ Reference: https://core.telegram.org/bots/api#markdownv2-style
 
 import re
 import logging
-from typing import cast, Any, List
+import time
+from typing import cast, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -41,70 +42,14 @@ def _convert_markdown_to_mdv2(text: str) -> str:
         # Check if this code block is actually a table.
         # If so, we want to align it properly (calculate widths).
         if re.search(r'\|.*\|', code):
-            # Use a dummy match since _format_table_internal expects one
-            class MockMatch:
-                def __init__(self, text): self._text = text
-                def group(self, _): return self._text
-            
             # Format the table content ONLY (no backticks)
-            formatted = _format_table_internal(MockMatch(code.strip()), wrap_in_code=False)
+            formatted = _format_table_internal(code.strip())
             code_blocks.append(cast(Any, f"```{lang}\n{formatted}\n```"))
         else:
             code_blocks.append(cast(Any, f"```{lang}\n{code}```"))
         return f"\x00CODEBLOCK{len(code_blocks) - 1}\x00"
 
-    # Define the table formatter utility
-    def _format_table_internal(match, wrap_in_code=True) -> str:
-        table_text = str(match.group(0)).strip()
-        lines = [line.strip() for line in table_text.split('\n') if line.strip()]
-        if len(lines) < 2: return table_text
-        
-        def split_row(row: str) -> List[str]:
-            cells = [cell.strip() for cell in row.split('|')]
-            if len(cells) > 0 and not cells[0]: cells.pop(0)
-            if len(cells) > 0 and not cells[-1]: cells.pop(-1)
-            return cells
-
-        rows = []
-        for line in lines:
-            if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
-            rows.append(split_row(line))
-        
-        if not rows: return table_text
-        
-        num_cols = max(len(row) for row in rows)
-        col_widths_dict = {i: 0 for i in range(num_cols)}
-        for row in rows:
-            for i, cell in enumerate(row):
-                if i in col_widths_dict:
-                    cell_len = len(cell)
-                    if cell_len > col_widths_dict.get(i, 0):
-                        col_widths_dict.update({i: cell_len})
-        
-        formatted_lines = []
-        for i, row in enumerate(rows):
-            padded_cells = []
-            for j in range(num_cols):
-                val = row[j] if j < len(row) else ""
-                cw = col_widths_dict.get(j, 0)
-                padded_cells.append(f" {val.ljust(cw)} ")
-            formatted_lines.append("|" + "|".join(padded_cells) + "|")
-            if i == 0:
-                sep_parts = []
-                for w in range(num_cols):
-                    sep_parts.append("-" * (col_widths_dict.get(w, 0) + 2))
-                sep = "|" + "|".join(sep_parts) + "|"
-                formatted_lines.append(sep)
-        
-        res = "\n".join(formatted_lines)
-        if wrap_in_code:
-            # We must stash this NEWly created code block so it doesn't get escaped in Step 4
-            placeholder = f"\x00CODEBLOCK{len(code_blocks)}\x00"
-            code_blocks.append(cast(Any, f"```\n{res}\n```"))
-            return f"\n{placeholder}\n"
-        return res
-
-    # Match fenced code blocks (```lang ... ```) - now more lenient with opening line
+    # Match fenced code blocks (```lang ... ```)
     text = re.sub(
         r'```(\w*)\s*\n(.*?)```',
         _stash_code_block,
@@ -113,13 +58,21 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     )
 
     # ── Step 1: Handle Markdown Tables in the remaining text ──────────────────────
-    table_pattern = r'(?m)^ {0,3}\|?.*\|.*\|?.*?\n {0,3}\|?[\s\-:|]+\|[\s\-:|]*\n(?: {0,3}\|?.*\|.*\|?.*?\n?)*'
-    text = re.sub(table_pattern, lambda m: _format_table_internal(m, wrap_in_code=True), text)
+    table_pattern = r'(?m)^ {0,3}(?:\|?.*\|.*\|?.*?)\n {0,3}\|?[\s\-:|]+\|[\s\-:|]*\n(?: {0,3}\|?.*\|.*\|?.*?\n?)*'
+    
+    def _format_table_match(match: re.Match) -> str:
+        res = _format_table_internal(match.group(0))
+        # Stash the table as a code block to protect it from escaping
+        placeholder = f"\x00CODEBLOCK{len(code_blocks)}\x00"
+        code_blocks.append(cast(Any, f"```\n{res}\n```"))
+        return f"\n{placeholder}\n"
+
+    text = re.sub(table_pattern, _format_table_match, text)
 
     # ── Step 2: Extract inline code so it isn't mangled ─────────────────────
     inline_codes = []
     
-    def _stash_inline_code(match):
+    def _stash_inline_code(match: re.Match) -> str:
         code = match.group(1)
         placeholder = f"\x00INLINECODE{len(inline_codes)}\x00"
         # Inline code in MarkdownV2: `code` — contents are not escaped
@@ -131,12 +84,11 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     # ── Step 3: Extract markdown links [text](url) ─────────────────────────
     links = []
     
-    def _stash_link(match):
+    def _stash_link(match: re.Match) -> str:
         link_text = match.group(1)
         url = match.group(2)
         placeholder = f"\x00LINK{len(links)}\x00"
         # MarkdownV2 links: [escaped text](url)
-        # Link text needs escaping, URL does NOT (except for `)` and `\`)
         escaped_text = _escape_mdv2(link_text)
         safe_url = url.replace('\\', '\\\\').replace(')', '\\)')
         links.append(cast(Any, f"[{escaped_text}]({safe_url})"))
@@ -189,7 +141,7 @@ def _convert_markdown_to_mdv2(text: str) -> str:
             converted_lines.append(cast(Any, f"{_escape_mdv2(num)}\\. {content}"))
             continue
 
-        # Regular line — apply inline formatting and escape
+        # Regular line — apply inline formatting
         converted_lines.append(cast(Any, _apply_inline_formatting(stripped)))
     
     text = '\n'.join(converted_lines)
@@ -212,11 +164,76 @@ def _convert_markdown_to_mdv2(text: str) -> str:
     
     return text.strip()
 
+
+def _format_table_internal(table_text: str) -> str:
+    """Premium Unicode Table Formatter for Telegram."""
+    lines = [line.strip() for line in table_text.split('\n') if line.strip()]
+    if len(lines) < 2: return table_text
+    
+    rows = []
+    for line in lines:
+        if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
+        rows.append(_split_row(line))
+    
+    if not rows: return table_text
+    
+    num_cols = max(len(row) for row in rows)
+    widths = [0] * num_cols
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < num_cols:
+                cell_len = len(cell)
+                if cell_len > widths[i]:
+                    widths[i] = cell_len
+    
+    formatted_lines = []
+    
+    # Top border
+    top = "┌"
+    for j in range(num_cols):
+        top += "─" * (widths[j] + 2)
+        if j < num_cols - 1: top += "┬"
+    top += "┐"
+    formatted_lines.append(top)
+    
+    for i, row in enumerate(rows):
+        padded_cells = []
+        for j in range(num_cols):
+            val = row[j] if j < len(row) else ""
+            cw = widths[j]
+            padded_cells.append(f" {val.ljust(cw)} ")
+        
+        formatted_lines.append("│" + "│".join(padded_cells) + "│")
+        
+        if i == 0: # Header separator
+            mid = "├"
+            for j in range(num_cols):
+                mid += "─" * (widths[j] + 2)
+                if j < num_cols - 1: mid += "┼"
+            mid += "┤"
+            formatted_lines.append(mid)
+    
+    # Bottom border
+    bot = "└"
+    for j in range(num_cols):
+        bot += "─" * (widths[j] + 2)
+        if j < num_cols - 1: bot += "┴"
+    bot += "┘"
+    formatted_lines.append(bot)
+    
+    return "\n".join(formatted_lines)
+
+
+def _split_row(row: str) -> List[str]:
+    """Split markdown table row into cells."""
+    cells = [cell.strip() for cell in row.split('|')]
+    if len(cells) > 0 and not cells[0]: cells.pop(0)
+    if len(cells) > 0 and not cells[-1]: cells.pop(-1)
+    return cells
+
+
 def _apply_inline_formatting(text: str) -> str:
-    """
-    Convert inline markdown (bold, italic, strikethrough) and escape
-    remaining special characters for MarkdownV2.
-    """
+    """Apply inline markdown and escape remaining special chars."""
     if not text:
         return ""
 
@@ -224,7 +241,7 @@ def _apply_inline_formatting(text: str) -> str:
     BOLD_OPEN = "\x01BOPEN\x01"
     BOLD_CLOSE = "\x01BCLOSE\x01"
     
-    def _bold_replace(match):
+    def _bold_replace(match: re.Match) -> str:
         inner = match.group(1)
         escaped_inner = _escape_mdv2(inner)
         return f"{BOLD_OPEN}{escaped_inner}{BOLD_CLOSE}"
@@ -236,7 +253,7 @@ def _apply_inline_formatting(text: str) -> str:
     ITALIC_OPEN = "\x01IOPEN\x01"
     ITALIC_CLOSE = "\x01ICLOSE\x01"
     
-    def _italic_replace(match):
+    def _italic_replace(match: re.Match) -> str:
         inner = match.group(1)
         escaped_inner = _escape_mdv2(inner)
         return f"{ITALIC_OPEN}{escaped_inner}{ITALIC_CLOSE}"
@@ -248,36 +265,28 @@ def _apply_inline_formatting(text: str) -> str:
     STRIKE_OPEN = "\x01SOPEN\x01"
     STRIKE_CLOSE = "\x01SCLOSE\x01"
     
-    def _strike_replace(match):
+    def _strike_replace(match: re.Match) -> str:
         inner = match.group(1)
         escaped_inner = _escape_mdv2(inner)
         return f"{STRIKE_OPEN}{escaped_inner}{STRIKE_CLOSE}"
     
     text = re.sub(r'~~(.+?)~~', _strike_replace, text)
 
-    # Now escape any remaining special characters that aren't part of formatting.
-    # We protect placeholders by splitting the text into segments.
-    # Pattern matches any of our protected markers: \x00... \x00, \b, \r, \x01...
-    protected_pattern = r'(\x00(?:CODEBLOCK|INLINE|WA_THINKING|WA_CALL)\d+\x00|\b|\r|\x01[A-Z]+\x01)'
+    # Escape remaining special characters
+    protected_pattern = r'(\x00(?:CODEBLOCK|INLINE|LINK)\d+\x00|\x01[A-Z]+\x01)'
     segments = re.split(protected_pattern, text)
     
     result_segments = []
     for seg in segments:
-        if not seg:
-            continue
-        # If it's a protected segment, keep it as is
+        if not seg: continue
         if re.match(protected_pattern, seg):
             result_segments.append(seg)
         else:
-            # Escape special MarkdownV2 characters in raw text segments
-            # We must also handle backticks specifically if they aren't part of a marker
-            # though Step 0/1/2 should have stashed them.
-            escaped = _escape_mdv2(seg)
-            result_segments.append(escaped)
+            result_segments.append(_escape_mdv2(seg))
     
     final_text = ''.join(result_segments)
     
-    # Restore bold and italic placeholders
+    # Restore placeholders
     final_text = final_text.replace(BOLD_OPEN, "*")
     final_text = final_text.replace(BOLD_CLOSE, "*")
     final_text = final_text.replace(ITALIC_OPEN, "_")
@@ -289,38 +298,19 @@ def _apply_inline_formatting(text: str) -> str:
 
 
 def format_for_telegram(text: str) -> str:
-    """
-    Main entry point. Converts standard markdown text to Telegram MarkdownV2.
-    
-    Args:
-        text: Raw markdown text from the LLM.
-        
-    Returns:
-        MarkdownV2-formatted text safe for Telegram's API.
-    """
+    """Main entry point for Telegram formatting."""
     if not text:
         return ""
     
     try:
         return _convert_markdown_to_mdv2(text)
     except Exception as e:
-        logger.warning(f"MarkdownV2 conversion failed, falling back to escaped plain text: {e}")
+        logger.warning(f"MarkdownV2 conversion failed: {e}")
         return _escape_mdv2(text)
 
 
 def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
-    """
-    Split a long MarkdownV2 message into chunks that respect Telegram's
-    4096 character limit, splitting on paragraph boundaries and never
-    breaking mid-code-block.
-    
-    Args:
-        text: The MarkdownV2-formatted text.
-        max_length: Maximum characters per chunk (Telegram limit is 4096).
-        
-    Returns:
-        A list of message chunks.
-    """
+    """Split long MarkdownV2 message into chunks."""
     if len(text) <= max_length:
         return [text]
     
@@ -328,7 +318,6 @@ def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
     rem_text: str = text
     
     while rem_text:
-        # Re-assert for Pyre
         if not isinstance(rem_text, str): break
         
         text_len = len(rem_text)
@@ -336,7 +325,6 @@ def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
             chunks.append(rem_text)
             break
         
-        # Extract the segment we can work with using regex to keep Pyre happy
         limit_pattern = r'^(.{1,' + str(max_length) + r'})'
         limit_match = re.match(limit_pattern, rem_text, flags=re.DOTALL)
         if not limit_match:
@@ -346,44 +334,30 @@ def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
         head = str(limit_match.group(1))
         split_at = len(head)
         
-        # Prefer splitting at double newline (paragraph boundary)
         para_break = head.rfind('\n\n')
         if para_break > max_length // 3:
             split_at = para_break
         else:
-            # Fall back to single newline
             line_break = head.rfind('\n')
             if line_break > max_length // 3:
                 split_at = line_break
         
-        # Safety: check we're not splitting inside a code block
-        # Use regex to get the prefix up to split_at
         prefix_pattern = r'^(.{0,' + str(split_at) + r'})'
         prefix_match = re.match(prefix_pattern, rem_text, flags=re.DOTALL)
         
-        chunk_candidate = ""
-        if prefix_match:
-            chunk_candidate = str(prefix_match.group(1))
-        else:
-            chunk_candidate = head # Fallback
+        chunk_candidate = str(prefix_match.group(1)) if prefix_match else head
             
         if chunk_candidate.count('```') % 2 != 0:
-            # We'd split inside a code block — find the start of this code block
             last_code_start = chunk_candidate.rfind('```')
-            # Find newline before code (searching in the same chunk_candidate)
             safe_split = chunk_candidate.rfind('\n', 0, last_code_start)
             if safe_split > 0:
                 split_at = safe_split
-                # Final re-match for the safe split point
                 final_pattern = r'^(.{0,' + str(split_at) + r'})'
                 final_match = re.match(final_pattern, rem_text, flags=re.DOTALL)
                 if final_match:
                     chunk_candidate = str(final_match.group(1))
         
-        # Finalize this chunk
         chunks.append(chunk_candidate.rstrip())
-        # Update rem_text using regex to remove what we just took
-        # We need to re-verify the split point pattern matches exactly what we took
         take_pattern = r'^(.{0,' + str(split_at) + r'})'
         rem_text = re.sub(take_pattern, '', rem_text, count=1, flags=re.DOTALL).lstrip('\n')
     
@@ -391,31 +365,20 @@ def smart_chunk(text: str, max_length: int = 4096) -> List[str]:
 
 
 def strip_markdown(text: str) -> str:
-    """
-    Completely strip all markdown formatting for plain-text fallback.
-    Used when MarkdownV2 parsing fails on Telegram's end.
-    """
+    """Fallback plain-text stripping."""
     if not text:
         return ""
     
-    # Remove code block markers
     text = re.sub(r'```\w*\n?', '', text)
-    # Remove inline code markers
     text = re.sub(r'`', '', text)
-    # Remove bold/italic markers
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
     text = re.sub(r'_(.+?)_', r'\1', text)
-    # Remove strikethrough
     text = re.sub(r'~~(.+?)~~', r'\1', text)
-    # Convert links to plain text
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-    # Remove heading markers
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-    # Remove horizontal rules
     text = re.sub(r'^[-*_]{3,}\s*$', '───────────', text, flags=re.MULTILINE)
-    # Clean up escape characters
     text = text.replace('\\', '')
     
     return text.strip()

@@ -16,9 +16,12 @@ from typing import List, Dict, Any, AsyncGenerator, cast, Optional, Callable, Aw
 from types import SimpleNamespace
 from server.lite_router import router # type: ignore
 from server.mcp_manager import mcp_manager # type: ignore
-from server.memory import memory # type: ignore
-from server.openclaw_ingestor import OpenClawIngestor # type: ignore
 from server.personality_manager import personality_manager # type: ignore
+from server.memory import memory, GOKU_DEFAULT_PERSONA # type: ignore
+from server.channel_manager import channel_broker # type: ignore
+from server.scheduler_manager import scheduler_manager # type: ignore
+from server.job_tracker import job_tracker # type: ignore
+from server.openclaw_ingestor import OpenClawIngestor # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -666,7 +669,6 @@ class GokuAgent:
         # 1. Resolve active persona name for memory scoping
         # Get the NAME of the assigned persona (not its content). We use the mappings
         # to find which named persona is active, defaulting to 'goku_default' for bare sessions.
-        from server.memory import GOKU_DEFAULT_PERSONA  # type: ignore
         active_persona_name: str = GOKU_DEFAULT_PERSONA
         all_mappings = personality_manager.get_all_mappings()
         for mapped_target, mapped_persona_name in all_mappings.items():
@@ -1311,7 +1313,6 @@ class GokuAgent:
                             result = {"status": "error", "message": f"Unknown action: {action}"}
                 
                 elif tool_name == "list_groups":
-                    from server.channel_manager import channel_broker # type: ignore
                     groups = await channel_broker.get_groups(source)
                     # Groups may contain neonize GroupName objects which are not JSON serializable.
                     safe_groups = [
@@ -1323,8 +1324,6 @@ class GokuAgent:
                     
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "fetch_chat_history":
-                    from server.channel_manager import channel_broker # type: ignore
-                    from server.memory import memory # type: ignore
                     target = tool_args.get("target")
                     count = tool_args.get("count", 10)
                     if not target:
@@ -1369,7 +1368,6 @@ class GokuAgent:
                         result = {"status": "success", "history": formatted_history, "jid": target_jid}
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "get_chat_details":
-                    from server.channel_manager import channel_broker # type: ignore
                     target = tool_args.get("target")
                     if not target:
                         result = {"status": "error", "message": "Missing 'target' for chat details."}
@@ -1394,7 +1392,6 @@ class GokuAgent:
                         result = info
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "send_message":
-                    from server.channel_manager import channel_broker # type: ignore
                     jid = tool_args.get("jid")
                     text = tool_args.get("text")
                     if not jid or not text:

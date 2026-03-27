@@ -65,57 +65,6 @@ def _convert_to_whatsapp(text: str) -> str:
     # Matches markdown tables regardless of leading/trailing pipes
     table_pattern = r'(?m)^ {0,3}(?:\|?.*\|.*\|?.*?)\n {0,3}\|?[\s\-:|]+\|[\s\-:|]*\n(?: {0,3}\|?.*\|.*\|?.*?\n?)*'
 
-    def _format_table_internal(table_text: str) -> str:
-        lines = [l.strip() for l in table_text.split("\n") if l.strip()]
-        if len(lines) < 2: return table_text
-        
-        rows = []
-        for line in lines:
-            # Skip separator line |---|
-            if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
-            
-            # Split by | and clean cells
-            cells = [c.strip() for c in line.split("|")]
-            # Remove empty leading/trailing cells if present using pop to avoid slicing lints
-            if cells and not cells[0]: cells.pop(0)
-            if cells and not cells[-1]: cells.pop(-1)
-            rows.append(cells)
-            
-        if not rows: return table_text
-        
-        # Determine column count and widths
-        col_count = max(len(r) for r in rows)
-        # Use dict to satisfy Pyre indexing issues
-        widths_dict = {i: 0 for i in range(col_count)}
-        for row in rows:
-            for i, cell in enumerate(row):
-                if i in widths_dict:
-                    cur_len = len(cell)
-                    if cur_len > widths_dict.get(i, 0):
-                        widths_dict.update({i: cur_len})
-        
-        # Build ASCII Table (Premium Alignment Style)
-        formatted = []
-        for i, row in enumerate(rows):
-            padded = []
-            for j in range(col_count):
-                val = row[j] if j < len(row) else ""
-                # Add 1 space padding on each side for clarity
-                w = widths_dict.get(j, 0)
-                padded.append(f" {val.ljust(w)} ")
-            
-            formatted.append("|" + "|".join(padded) + "|")
-            
-            if i == 0: # Header separator
-                sep_parts = []
-                for j in range(col_count):
-                    w = widths_dict.get(j, 0)
-                    sep_parts.append("-" * (w + 2))
-                sep = "|" + "|".join(sep_parts) + "|"
-                formatted.append(sep)
-                
-        return "\n".join(formatted)
-
     def format_table_match(match: re.Match) -> str:
         res = _format_table_internal(match.group(0))
         return f"\n```\n{res}\n```\n"
@@ -171,13 +120,83 @@ def _convert_to_whatsapp(text: str) -> str:
     return text.strip()
 
 
+def _format_table_internal(table_text: str) -> str:
+    """Premium Unicode Table Formatter."""
+    lines = [l.strip() for l in table_text.split("\n") if l.strip()]
+    if len(lines) < 2: return table_text
+    
+    rows = []
+    for line in lines:
+        # Skip separator line |---|
+        if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
+        rows.append(_split_row(line))
+    
+    if not rows: return table_text
+    
+    col_count = max(len(r) for r in rows)
+    # Use list for widths to avoid dict indexing lints
+    widths = [0] * col_count
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < col_count:
+                cell_len = len(cell)
+                if cell_len > widths[i]:
+                    widths[i] = cell_len
+    
+    formatted = []
+    
+    # Top border
+    top = "┌"
+    for j in range(col_count):
+        top += "─" * (widths[j] + 2)
+        if j < col_count - 1: top += "┬"
+    top += "┐"
+    formatted.append(top)
+    
+    for i, row in enumerate(rows):
+        padded = []
+        for j in range(col_count):
+            val = row[j] if j < len(row) else ""
+            w = widths[j]
+            padded.append(f" {val.ljust(w)} ")
+        
+        formatted.append("│" + "│".join(padded) + "│")
+        
+        if i == 0: # Header separator
+            mid = "├"
+            for j in range(col_count):
+                mid += "─" * (widths[j] + 2)
+                if j < col_count - 1: mid += "┼"
+            mid += "┤"
+            formatted.append(mid)
+    
+    # Bottom border
+    bot = "└"
+    for j in range(col_count):
+        bot += "─" * (widths[j] + 2)
+        if j < col_count - 1: bot += "┴"
+    bot += "┘"
+    formatted.append(bot)
+            
+    return "\n".join(formatted)
+
+
+def _split_row(line: str) -> List[str]:
+    """Split markdown table row into cells."""
+    cells = [c.strip() for c in line.split("|")]
+    # Remove empty leading/trailing cells if present
+    if cells and not cells[0]: cells.pop(0)
+    if cells and not cells[-1]: cells.pop(-1)
+    return cells
+
+
 def _strip_markdown(text: str) -> str:
     """Fallback plain text."""
     text = re.sub(r'```\w*\n?', '', text)
     text = re.sub(r'`', '', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'_(.+?)_', r'\1', text)
     text = re.sub(r'~~(.+?)~~', r'\1', text)
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
