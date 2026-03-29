@@ -12,13 +12,33 @@ class PersonalityManager:
         if storage_dir:
             self.storage_dir = storage_dir
         else:
-            # Default to server/personalities in the package root
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.storage_dir = os.path.join(base_dir, "server", "personalities")
+            # Use a global persistent directory instead of the source tree
+            # This ensures personas survive git pulls and application updates
+            self.storage_dir = os.path.expanduser("~/.goku/personalities")
             
         self.mapping_file = os.path.join(self.storage_dir, "mapping.json")
         os.makedirs(self.storage_dir, exist_ok=True)
+        
+        # Migration from legacy location if it exists
+        self._migrate_legacy_data()
         self._ensure_mapping_file()
+
+    def _migrate_legacy_data(self):
+        """Move data from server/personalities (legacy) to ~/.goku/personalities."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        legacy_dir = os.path.join(base_dir, "server", "personalities")
+        
+        if os.path.exists(legacy_dir) and legacy_dir != self.storage_dir:
+            import shutil
+            try:
+                for item in os.listdir(legacy_dir):
+                    s = os.path.join(legacy_dir, item)
+                    d = os.path.join(self.storage_dir, item)
+                    if os.path.isfile(s) and not os.path.exists(d):
+                        shutil.copy2(s, d)
+                logger.info(f"Migrated legacy personalities from {legacy_dir}")
+            except Exception as e:
+                logger.error(f"Migration error: {e}")
         
     def _ensure_mapping_file(self):
         if not os.path.exists(self.mapping_file):

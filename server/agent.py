@@ -11,6 +11,7 @@ import datetime # type: ignore
 import hashlib # type: ignore
 from PIL import Image # type: ignore
 import io
+import pdfplumber # type: ignore
 MAX_IMAGE_DIMENSION = 800
 from typing import List, Dict, Any, AsyncGenerator, cast, Optional, Callable, Awaitable
 from types import SimpleNamespace
@@ -785,7 +786,7 @@ class GokuAgent:
             # Add placeholders for non-image attachments so the agent knows they exist
             others = [p for p in all_attachments if p not in photos]
             for p in others:
-                content_array.append({"type": "text", "text": f"[File Received: {p}] (Use document parsing tools to read this)"})
+                content_array.append({"type": "text", "text": f"[File Received: {p}] (Please use the 'analyze_document' tool to read/analyze this file)"})
             
             history.append({"role": "user", "content": content_array})
         else:
@@ -870,6 +871,22 @@ class GokuAgent:
                     "properties": {
                         "path": {"type": "string"},
                         "question": {"type": "string"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        })
+
+        llm_tools.append({
+            "type": "function",
+            "function": {
+                "name": "analyze_document",
+                "description": "Extract text context from a document (PDF, TXT, MD, etc.) stored locally. Use this for document analysis requests.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The local path to the document file."},
+                        "pages": {"type": "string", "description": "Optional: Specific pages or range (e.g. '1-3', 'all'). Default is all."}
                     },
                     "required": ["path"]
                 }
