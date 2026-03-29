@@ -361,42 +361,66 @@ class WhatsAppBot:
                             async def send_wa(resp: str):
                                 try:
                                     from server.whatsapp_formatter import format_for_whatsapp # type: ignore
-                                    formatted = format_for_whatsapp(resp)
-                                    if is_voice:
+                                    
+                                    # --- New: Special Marker Handling ---
+                                    if resp.startswith("[VOICE_REPLY]: "):
+                                        voice_text = resp.replace("[VOICE_REPLY]: ", "").strip()
                                         from .speech_service import generate_speech # type: ignore
                                         ts = time.strftime("%Y%m%d_%H%M%S")
-                                        rp = os.path.join("uploads", f"wa_r_{ts}.mp3")
-                                        op = os.path.join("uploads", f"wa_r_{ts}.ogg")
+                                        rp, op = os.path.join("uploads", f"wa_v_{ts}.mp3"), os.path.join("uploads", f"wa_v_{ts}.ogg")
+                                        if await generate_speech(voice_text, rp):
+                                            try:
+                                                import subprocess
+                                                subprocess.run(["ffmpeg", "-y", "-i", rp, "-c:a", "libopus", op], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                                fpath = op if os.path.exists(op) else rp
+                                                with open(fpath, "rb") as af: buff = af.read()
+                                                up = c.upload(buff)
+                                                from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import AudioMessage, Message as WAMessage # type: ignore
+                                                audio_msg = AudioMessage(URL=up.url, directPath=up.DirectPath, fileEncSHA256=up.FileEncSHA256, fileLength=up.FileLength, fileSHA256=up.FileSHA256, mediaKey=up.MediaKey, mimetype="audio/ogg; codecs=opus", PTT=True)
+                                                c.send_message(raw_chat, WAMessage(audioMessage=audio_msg))
+                                            except Exception as e: logger.error(f"Voice reply fail: {e}")
+                                            finally:
+                                                for p in [rp, op]: 
+                                                    try: os.remove(p)
+                                                    except: pass
+                                        return
+
+                                    if resp.startswith("[MUSIC_REPLY]: "):
+                                        music_path = resp.replace("[MUSIC_REPLY]: ", "").strip()
+                                        if os.path.exists(music_path):
+                                            try:
+                                                with open(music_path, "rb") as mf: buff = mf.read()
+                                                up = c.upload(buff)
+                                                from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import AudioMessage, Message as WAMessage # type: ignore
+                                                # Regular music/MP3 is NOT PTT
+                                                audio_msg = AudioMessage(URL=up.url, directPath=up.DirectPath, fileEncSHA256=up.FileEncSHA256, fileLength=up.FileLength, fileSHA256=up.FileSHA256, mediaKey=up.MediaKey, mimetype="audio/mpeg", PTT=False)
+                                                c.send_message(raw_chat, WAMessage(audioMessage=audio_msg))
+                                            except Exception as e: logger.error(f"Music reply fail: {e}")
+                                        return
+                                    
+                                    # --- Standard Text Handling ---
+                                    formatted = format_for_whatsapp(resp)
+                                    if is_voice and not resp.startswith("["): # Only auto-convert to voice if it came in as voice and isn't a special marker
+                                        from .speech_service import generate_speech # type: ignore
+                                        ts = time.strftime("%Y%m%d_%H%M%S")
+                                        rp, op = os.path.join("uploads", f"wa_r_{ts}.mp3"), os.path.join("uploads", f"wa_r_{ts}.ogg")
                                         if await generate_speech(resp, rp):
                                             try:
                                                 import subprocess
                                                 subprocess.run(["ffmpeg", "-y", "-i", rp, "-c:a", "libopus", op], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                                
-                                                # WhatsApp strictly drops PTT voice notes locally if mimetype != "audio/ogg; codecs=opus"
-                                                # Neonize send_audio uses python-magic which only evaluates "audio/ogg", resulting in silent drops.
                                                 fpath = op if os.path.exists(op) else rp
                                                 with open(fpath, "rb") as af: buff = af.read()
-                                                
                                                 up = c.upload(buff)
-                                                audio_msg = AudioMessage(
-                                                    URL=up.url,
-                                                    directPath=up.DirectPath,
-                                                    fileEncSHA256=up.FileEncSHA256,
-                                                    fileLength=up.FileLength,
-                                                    fileSHA256=up.FileSHA256,
-                                                    mediaKey=up.MediaKey,
-                                                    mimetype="audio/ogg; codecs=opus",
-                                                    PTT=True
-                                                )
-                                                c.send_message(raw_chat, Message(audioMessage=audio_msg))
+                                                from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import AudioMessage, Message as WAMessage # type: ignore
+                                                audio_msg = AudioMessage(URL=up.url, directPath=up.DirectPath, fileEncSHA256=up.FileEncSHA256, fileLength=up.FileLength, fileSHA256=up.FileSHA256, mediaKey=up.MediaKey, mimetype="audio/ogg; codecs=opus", PTT=True)
+                                                c.send_message(raw_chat, WAMessage(audioMessage=audio_msg))
                                             except Exception as ae:
                                                 logger.error(f"WA audio reply error: {ae}; falling back to text.")
                                                 c.send_message(raw_chat, formatted)
                                             finally:
-                                                try: os.remove(rp)
-                                                except: pass
-                                                try: os.remove(op)
-                                                except: pass
+                                                for p in [rp, op]:
+                                                    try: os.remove(p)
+                                                    except: pass
                                             return
                                     c.send_message(raw_chat, formatted)
                                 except Exception as e: logger.error(f"WA send error: {e}")

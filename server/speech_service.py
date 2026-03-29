@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+ELEVENLABS_SOUNDS_URL = "https://api.elevenlabs.io/v1/sound-generation"
+ELEVENLABS_MUSIC_URL = "https://api.elevenlabs.io/v1/music/compose"
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 OPENAI_STT_URL = "https://api.openai.com/v1/audio/transcriptions"
 
@@ -127,3 +129,62 @@ async def generate_speech(text: str, output_path: str) -> bool:
         return False
         
     return False
+
+async def generate_music(prompt: str, output_path: str) -> bool:
+    """Generate music or singing from a prompt using ElevenLabs Music."""
+    load_dotenv(ENV_PATH, override=True)
+    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+
+    if not elevenlabs_key:
+        logger.info("Music generation requested, but no ELEVENLABS_API_KEY found.")
+        return False
+
+    headers = {
+        "xi-api-key": elevenlabs_key,
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "prompt": prompt,
+        "music_length_ms": 30000 # 30 seconds
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", ELEVENLABS_MUSIC_URL, headers=headers, json=data) as response:
+                if response.status_code == 200:
+                    with open(output_path, "wb") as f:
+                        async for chunk in response.aiter_bytes():
+                            f.write(chunk)
+                    return True
+                else:
+                    # Fallback to sound generation if music API is not yet available for this key
+                    logger.warning(f"Music API failed ({response.status_code}). Attempting sound fallback...")
+                    return await generate_sound_effect(prompt, output_path)
+    except Exception as e:
+        logger.error(f"Music generation error: {e}")
+        return False
+        
+    return False
+
+async def generate_sound_effect(text: str, output_path: str) -> bool:
+    """Generate a sound effect using ElevenLabs."""
+    load_dotenv(ENV_PATH, override=True)
+    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+
+    if not elevenlabs_key: return False
+
+    headers = {"xi-api-key": elevenlabs_key, "Content-Type": "application/json"}
+    data = {"text": text, "duration_seconds": 10}
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", ELEVENLABS_SOUNDS_URL, headers=headers, json=data) as response:
+                if response.status_code == 200:
+                    with open(output_path, "wb") as f:
+                        async for chunk in response.aiter_bytes(): f.write(chunk)
+                    return True
+        return False
+    except Exception as e:
+        logger.error(f"Sound effect error: {e}")
+        return False
