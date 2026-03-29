@@ -5,6 +5,7 @@ import logging
 import subprocess
 from typing import List, Dict, Any
 from .openclaw_ingestor import OpenClawIngestor # type: ignore
+from .gemini_search import gemini_search
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,26 @@ class MCPManager:
         })
 
 
+
+        # Add Native Search tool (Gemini Grounding)
+        all_tools.append({
+            "type": "function",
+            "function": {
+                "name": "google_search",
+                "description": "Perform a real-time Google search for up-to-date information, news, or facts. Powered by Google Gemini Grounding.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "source": "native"
+        })
 
         # Add OpenClaw tools
         try:
@@ -139,52 +160,60 @@ class MCPManager:
             return f"Error: Could not determine source for tool '{tool_name}'"
 
         # 2. Handle Native Tools
-        if server_name == "native" and tool_name == "bash":
-            raw_command = args.get("command")
-            if not raw_command:
-                return "Error: No 'command' argument provided for bash."
-            
-            # Determine the project root (one level up from server/)
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            venv_activate = os.path.join(project_root, "venv", "bin", "activate")
-            
-            # Source venv if it exists, otherwise just fall back to normal shell
-            # We use '.' as a portable version of 'source' just in case
-            env_cmd = f". {venv_activate} && " if os.path.exists(venv_activate) else ""
-            
-            # Wrap command to persist directory, source venv, and capture final CWD
-            # We explicitly use /bin/bash to ensure the 'source' command and other bash-isms work
-            full_command = f"cd {self.cwd} && ({env_cmd}{raw_command}) && pwd"
-            
-            try:
-                result = subprocess.run(
-                    ["/bin/bash", "-c", full_command], 
-                    capture_output=True, 
-                    text=True, 
-                    timeout=30.0
-                )
+        if server_name == "native":
+            if tool_name == "bash":
+                raw_command = args.get("command")
+                if not raw_command:
+                    return "Error: No 'command' argument provided for bash."
                 
-                output = result.stdout.strip().split("\n")
-                if output:
-                    new_cwd = output[-1].strip()
-                    if os.path.isdir(new_cwd):
-                        self.cwd = new_cwd
-                    # The actual output is everything except the last line (the pwd)
-                    actual_stdout = "\n".join(output[:-1]) # type: ignore
-                else:
-                    actual_stdout = result.stdout
+                # Determine the project root (one level up from server/)
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                venv_activate = os.path.join(project_root, "venv", "bin", "activate")
+                
+                # Source venv if it exists, otherwise just fall back to normal shell
+                # We use '.' as a portable version of 'source' just in case
+                env_cmd = f". {venv_activate} && " if os.path.exists(venv_activate) else ""
+                
+                # Wrap command to persist directory, source venv, and capture final CWD
+                # We explicitly use /bin/bash to ensure the 'source' command and other bash-isms work
+                full_command = f"cd {self.cwd} && ({env_cmd}{raw_command}) && pwd"
+                
+                try:
+                    result = subprocess.run(
+                        ["/bin/bash", "-c", full_command], 
+                        capture_output=True, 
+                        text=True, 
+                        timeout=30.0
+                    )
+                    
+                    output = result.stdout.strip().split("\n")
+                    if output:
+                        new_cwd = output[-1].strip()
+                        if os.path.isdir(new_cwd):
+                            self.cwd = new_cwd
+                        # The actual output is everything except the last line (the pwd)
+                        actual_stdout = "\n".join(output[:-1]) # type: ignore
+                    else:
+                        actual_stdout = result.stdout
 
-                if not actual_stdout and result.returncode == 0:
-                    actual_stdout = "[Command executed successfully with no output]"
+                    if not actual_stdout and result.returncode == 0:
+                        actual_stdout = "[Command executed successfully with no output]"
 
-                return {
-                    "stdout": actual_stdout,
-                    "stderr": result.stderr,
-                    "exit_code": result.returncode,
-                    "cwd": self.cwd
-                }
-            except Exception as e:
-                return f"Error executing bash: {str(e)}"
+                    return {
+                        "stdout": actual_stdout,
+                        "stderr": result.stderr,
+                        "exit_code": result.returncode,
+                        "cwd": self.cwd
+                    }
+                except Exception as e:
+                    return f"Error executing bash: {str(e)}"
+            
+            elif tool_name == "google_search":
+                query = args.get("query")
+                if not query:
+                    return "Error: No 'query' provided for google_search."
+                from .gemini_search import gemini_search
+                return await gemini_search(query)
 
         # 3. Handle OpenClaw Ingested Tools
         if server_name == "openclaw":
