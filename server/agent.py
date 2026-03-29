@@ -887,6 +887,21 @@ class GokuAgent:
         llm_tools.append({
             "type": "function",
             "function": {
+                "name": "generate_music",
+                "description": "Generate a music track or a singing audio clip based on a prompt using ElevenLabs Music. Use this when the user asks for a song, background music, or for Goku to 'sing'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string", "description": "A description of the music or song to generate (e.g. 'A Lo-Fi hip hop track with a chill vibe', 'A happy birthday song in a jazz style')."}
+                    },
+                    "required": ["prompt"]
+                }
+            }
+        })
+
+        llm_tools.append({
+            "type": "function",
+            "function": {
                 "name": "see_image",
                 "description": "Look at an image file stored locally.",
                 "parameters": {
@@ -1501,6 +1516,27 @@ class GokuAgent:
                                 result = {"status": "success", "message": f"Reacted with {emoji}"}
                             else:
                                 result = {"error": "Reactions not supported on this channel or missing emoji"}
+                        elif tool_name == "voice_reply":
+                            text = tool_args.get("text", "")
+                            if text:
+                                yield {"type": "message", "content": f"[VOICE_REPLY]: {text}"}
+                                result = {"status": "success", "message": "Voice note sent."}
+                            else:
+                                result = {"error": "Missing 'text' for voice reply"}
+                        elif tool_name == "generate_music":
+                            prompt = tool_args.get("prompt", "")
+                            if prompt:
+                                yield {"type": "thought", "content": f"🎵 Generating music for: '{prompt}'..."}
+                                from .speech_service import generate_music # type: ignore
+                                ts = time.strftime("%Y%m%d_%H%M%S")
+                                mp3_path = os.path.join("uploads", f"goku_music_{ts}.mp3")
+                                if await generate_music(prompt, mp3_path):
+                                    yield {"type": "message", "content": f"[MUSIC_REPLY]: {mp3_path}"}
+                                    result = {"status": "success", "message": "Music generated and sent."}
+                                else:
+                                    result = {"error": "Failed to generate music track."}
+                            else:
+                                result = {"error": "Missing 'prompt' for music generation"}
                         elif tool_name == "learn_lesson":
                             lesson = tool_args.get("lesson")
                             skill_context = tool_args.get("skill_context", "general")
