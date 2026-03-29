@@ -23,3 +23,5 @@ markitdown
 neonize
 segno
 apscheduler
+pdfplumber
+Pillow
