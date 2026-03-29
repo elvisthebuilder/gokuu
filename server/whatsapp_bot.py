@@ -235,7 +235,7 @@ class WhatsAppBot:
                         # Forwarded voice notes and audio often arrive as Documents
                         if original_filename:
                             ext = original_filename.lower().split(".")[-1]
-                            if ext in ["ogg", "mp3", "m4a", "wav", "aac"]:
+                            if ext in ["ogg", "mp3", "m4a", "wav", "aac", "opus"]:
                                 m_type, is_voice = "audio", True
                         elif hasattr(msg.documentMessage, "mimetype"):
                             if "audio" in msg.documentMessage.mimetype.lower():
