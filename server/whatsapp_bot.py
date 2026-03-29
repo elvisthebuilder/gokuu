@@ -219,7 +219,7 @@ class WhatsAppBot:
                     elif hasattr(msg, "documentMessage") and msg.documentMessage:
                         text, m_type = msg.documentMessage.caption, "document"
                         original_filename = getattr(msg.documentMessage, "fileName", "")
-                    elif hasattr(msg, "audioMessage") and msg.audioMessage: m_type, is_voice = "audio", msg.audioMessage.ptt
+                    elif hasattr(msg, "audioMessage") and msg.audioMessage: m_type, is_voice = "audio", True
                     elif hasattr(msg, "stickerMessage") and msg.stickerMessage: m_type = "sticker"
 
                     if m_type:
