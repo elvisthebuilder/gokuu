@@ -212,16 +212,16 @@ class WhatsAppBot:
                     
                     msg = message.Message
                     
-                    # Unwrap ephemeral and view_once messages
-                    if hasattr(msg, "ephemeralMessage") and msg.ephemeralMessage and msg.ephemeralMessage.message:
+                    # Unwrap ephemeral and view_once messages using proper Protobuf HasField checks
+                    if msg.HasField("ephemeralMessage") and msg.ephemeralMessage.message:
                         msg = msg.ephemeralMessage.message
-                    if hasattr(msg, "viewOnceMessage") and msg.viewOnceMessage and msg.viewOnceMessage.message:
+                    elif msg.HasField("viewOnceMessage") and msg.viewOnceMessage.message:
                         msg = msg.viewOnceMessage.message
-                    if hasattr(msg, "viewOnceMessageV2") and msg.viewOnceMessageV2 and msg.viewOnceMessageV2.message:
+                    elif msg.HasField("viewOnceMessageV2") and msg.viewOnceMessageV2.message:
                         msg = msg.viewOnceMessageV2.message
-                    if hasattr(msg, "documentWithCaptionMessage") and msg.documentWithCaptionMessage and msg.documentWithCaptionMessage.message:
+                    elif msg.HasField("documentWithCaptionMessage") and msg.documentWithCaptionMessage.message:
                         msg = msg.documentWithCaptionMessage.message
-                    if hasattr(msg, "viewOnceMessageV2Extension") and msg.viewOnceMessageV2Extension and msg.viewOnceMessageV2Extension.message:
+                    elif msg.HasField("viewOnceMessageV2Extension") and msg.viewOnceMessageV2Extension.message:
                         msg = msg.viewOnceMessageV2Extension.message
 
                     text, attachment_path, is_voice, m_type, original_filename = "", None, False, None, ""
