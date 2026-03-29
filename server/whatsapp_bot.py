@@ -259,18 +259,26 @@ class WhatsAppBot:
                         nonlocal text, mentioned, p_text
                         try:
                             # 1. Transcribe if voice
-                            if is_voice and attachment_path:
-                                from .speech_service import transcribe_audio # type: ignore
-                                transcript = await transcribe_audio(attachment_path)
-                                if transcript:
-                                    text = ("[Voice Note Transcript]: " + transcript).strip()
+                            if is_voice:
+                                if attachment_path:
+                                    from .speech_service import transcribe_audio # type: ignore
+                                    transcript = await transcribe_audio(attachment_path)
+                                    if transcript:
+                                        text = ("[Voice Note Transcript]: " + transcript).strip()
+                                    else:
+                                        logger.warning(f"STT transcription failed for {attachment_path}. Notifying user.")
+                                        try:
+                                            c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but I couldn't transcribe it. Make sure an ELEVENLABS_API_KEY is set in your .env, then try again."))
+                                        except Exception as se:
+                                            logger.error(f"Failed to send STT error reply: {se}")
+                                        return
                                 else:
-                                    # Transcription failed — inform the user and bail out early
-                                    logger.warning(f"STT transcription failed for {attachment_path}. Notifying user.")
+                                    # Audio download failed — attachment_path is None
+                                    logger.warning("Voice note download failed (attachment_path is None). Notifying user.")
                                     try:
-                                        c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but I couldn't transcribe it. This usually means no Speech-to-Text API key (GROQ_API_KEY, ELEVENLABS_API_KEY, or OPENAI_API_KEY) is configured, or the transcription service returned an error. Please check the server logs or send a text message instead."))
+                                        c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but failed to download it. Please try sending it again."))
                                     except Exception as se:
-                                        logger.error(f"Failed to send STT error reply: {se}")
+                                        logger.error(f"Failed to send download error reply: {se}")
                                     return
                             
                             # 2. Complete Mention Logic (now that we have transcript for voice)
@@ -296,12 +304,10 @@ class WhatsAppBot:
                             # 3. Identity Awareness: Prefix message with sender details
                             if text:
                                 p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}"
-                            elif m_type and m_type != "audio":
+                            elif m_type:
                                 p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
                             else:
-                                # Audio with no transcript should have been caught above; bail
-                                logger.warning("Voice note reached p_text construction with no text — skipping.")
-                                return
+                                return  # No content at all — ignore
                             if is_group:
                                 p_text = f"[FROM: {sender_name}]: {p_text}"
 
