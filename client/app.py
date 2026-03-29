@@ -923,7 +923,7 @@ async def configure_vision_provider():
                 config_manager.set_key("GOOGLE_API_KEY", key)
                 # LiteLLM also uses GEMINI_API_KEY frequently
                 config_manager.set_key("GEMINI_API_KEY", key)
-        rprint("[bold green]✅ Vision provider set to Google (Gemini 1.5 Flash).[/bold green]")
+        rprint("[bold green]✅ Vision provider set to Google (Gemini 2.5 Flash).[/bold green]")
 
 
 async def configure_memory():

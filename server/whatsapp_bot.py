@@ -289,7 +289,7 @@ class WhatsAppBot:
                                     else:
                                         logger.warning(f"STT transcription failed for {attachment_path}. Notifying user.")
                                         try:
-                                            c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but I couldn't transcribe it. Make sure an ELEVENLABS_API_KEY is set in your .env, then try again."))
+                                            c.send_message(raw_chat, "🎙️ I received your voice note, but I couldn't transcribe it. Make sure an ELEVENLABS_API_KEY is set in your .env, then try again.")
                                         except Exception as se:
                                             logger.error(f"Failed to send STT error reply: {se}")
                                         return
@@ -297,7 +297,7 @@ class WhatsAppBot:
                                     # Audio download failed — attachment_path is None
                                     logger.warning("Voice note download failed (attachment_path is None). Notifying user.")
                                     try:
-                                        c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but failed to download it. Please try sending it again."))
+                                        c.send_message(raw_chat, "🎙️ I received your voice note, but failed to download it. Please try sending it again.")
                                     except Exception as se:
                                         logger.error(f"Failed to send download error reply: {se}")
                                     return
@@ -391,14 +391,14 @@ class WhatsAppBot:
                                                 c.send_message(raw_chat, Message(audioMessage=audio_msg))
                                             except Exception as ae:
                                                 logger.error(f"WA audio reply error: {ae}; falling back to text.")
-                                                c.send_message(raw_chat, Message(conversation=formatted))
+                                                c.send_message(raw_chat, formatted)
                                             finally:
                                                 try: os.remove(rp)
                                                 except: pass
                                                 try: os.remove(op)
                                                 except: pass
                                             return
-                                    c.send_message(raw_chat, Message(conversation=formatted))
+                                    c.send_message(raw_chat, formatted)
                                 except Exception as e: logger.error(f"WA send error: {e}")
 
                             async def status_upd(s: str):
