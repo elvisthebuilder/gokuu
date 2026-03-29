@@ -366,14 +366,19 @@ class WhatsAppBot:
                                         from .speech_service import generate_speech # type: ignore
                                         ts = time.strftime("%Y%m%d_%H%M%S")
                                         rp = os.path.join("uploads", f"wa_r_{ts}.mp3")
+                                        op = os.path.join("uploads", f"wa_r_{ts}.ogg")
                                         if await generate_speech(resp, rp):
                                             try:
-                                                c.send_audio(raw_chat, rp, ptt=True)
+                                                import subprocess
+                                                subprocess.run(["ffmpeg", "-y", "-i", rp, "-c:a", "libopus", op], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                                c.send_audio(raw_chat, op if os.path.exists(op) else rp, ptt=True)
                                             except Exception as ae:
                                                 logger.error(f"WA audio reply error: {ae}; falling back to text.")
                                                 c.send_message(raw_chat, Message(conversation=formatted))
                                             finally:
                                                 try: os.remove(rp)
+                                                except: pass
+                                                try: os.remove(op)
                                                 except: pass
                                             return
                                     c.send_message(raw_chat, Message(conversation=formatted))
