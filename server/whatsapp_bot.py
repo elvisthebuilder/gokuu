@@ -371,7 +371,24 @@ class WhatsAppBot:
                                             try:
                                                 import subprocess
                                                 subprocess.run(["ffmpeg", "-y", "-i", rp, "-c:a", "libopus", op], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                                c.send_audio(raw_chat, op if os.path.exists(op) else rp, ptt=True)
+                                                
+                                                # WhatsApp strictly drops PTT voice notes locally if mimetype != "audio/ogg; codecs=opus"
+                                                # Neonize send_audio uses python-magic which only evaluates "audio/ogg", resulting in silent drops.
+                                                fpath = op if os.path.exists(op) else rp
+                                                with open(fpath, "rb") as af: buff = af.read()
+                                                
+                                                up = c.upload(buff)
+                                                audio_msg = AudioMessage(
+                                                    URL=up.url,
+                                                    directPath=up.DirectPath,
+                                                    fileEncSHA256=up.FileEncSHA256,
+                                                    fileLength=up.FileLength,
+                                                    fileSHA256=up.FileSHA256,
+                                                    mediaKey=up.MediaKey,
+                                                    mimetype="audio/ogg; codecs=opus",
+                                                    PTT=True
+                                                )
+                                                c.send_message(raw_chat, Message(audioMessage=audio_msg))
                                             except Exception as ae:
                                                 logger.error(f"WA audio reply error: {ae}; falling back to text.")
                                                 c.send_message(raw_chat, Message(conversation=formatted))
