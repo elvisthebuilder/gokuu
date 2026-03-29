@@ -368,11 +368,7 @@ class WhatsAppBot:
                                         rp = os.path.join("uploads", f"wa_r_{ts}.mp3")
                                         if await generate_speech(resp, rp):
                                             try:
-                                                with open(rp, "rb") as af:
-                                                    audio_bytes = af.read()
-                                                file_len = len(audio_bytes)
-                                                audio_msg = AudioMessage(ptt=True, mimetype="audio/mpeg", fileLength=file_len)
-                                                c.send_message(raw_chat, Message(audioMessage=audio_msg))
+                                                c.send_audio(raw_chat, rp, ptt=True)
                                             except Exception as ae:
                                                 logger.error(f"WA audio reply error: {ae}; falling back to text.")
                                                 c.send_message(raw_chat, Message(conversation=formatted))

@@ -41,15 +41,8 @@ def _convert_to_whatsapp(text: str) -> str:
         # Group 2: inner content
         content = m.group(2).strip()
         
-        # Check if content looks like a table - if so, we want to align it properly
-        # but NOT double-wrap it in backticks later.
-        if re.search(r'\|.*\|', content):
-            # Format the table content ONLY (no backticks)
-            formatted = _format_table_internal(content)
-            code_blocks.append(f"```\n{formatted}\n```")
-        else:
-            # WhatsApp doesn't support ```python, it just wants ```
-            code_blocks.append(f"```\n{content}\n```")
+        # WhatsApp doesn't support ```python, it just wants ```
+        code_blocks.append(f"```\n{content}\n```")
             
         return f"\x00CODE{len(code_blocks)-1}\x00"
 
@@ -62,14 +55,8 @@ def _convert_to_whatsapp(text: str) -> str:
     text = re.sub(r"```+\s*(\w*)\s*\n?(.*?)```+", stash_code, text, flags=re.DOTALL)
 
     # ── 2. Convert Markdown tables (remaining text outside blocks) ───────────
-    # Matches markdown tables regardless of leading/trailing pipes
-    table_pattern = r'(?m)^ {0,3}(?:\|?.*\|.*\|?.*?)\n {0,3}\|?[\s\-:|]+\|[\s\-:|]*\n(?: {0,3}\|?.*\|.*\|?.*?\n?)*'
-
-    def format_table_match(match: re.Match) -> str:
-        res = _format_table_internal(match.group(0))
-        return f"\n```\n{res}\n```\n"
-
-    text = re.sub(table_pattern, format_table_match, text)
+    # WhatsApp natively supports Markdown tables now. We no longer mangle them into Unicode.
+    # We just let them pass through.
 
     # ── 3. Preserve inline code (`) ───────────────────────────────────────────
     inline_codes = []
@@ -119,74 +106,6 @@ def _convert_to_whatsapp(text: str) -> str:
 
     return text.strip()
 
-
-def _format_table_internal(table_text: str) -> str:
-    """Premium Unicode Table Formatter."""
-    lines = [l.strip() for l in table_text.split("\n") if l.strip()]
-    if len(lines) < 2: return table_text
-    
-    rows = []
-    for line in lines:
-        # Skip separator line |---|
-        if re.match(r'^\|?[\s\-:|]+\|?$', line): continue
-        rows.append(_split_row(line))
-    
-    if not rows: return table_text
-    
-    col_count = max(len(r) for r in rows)
-    col_widths: List[int] = [0] * col_count
-    for row in rows:
-        for i, cell in enumerate(row):
-            if i < col_count:
-                cell_len = len(cell)
-                if cell_len > col_widths[i]:
-                    col_widths[i] = cell_len
-    
-    formatted = []
-    
-    # Top border
-    top = "┌"
-    for j in range(col_count):
-        top += "─" * (col_widths[j] + 2)
-        if j < col_count - 1: top += "┬"
-    top += "┐"
-    formatted.append(top)
-    
-    for i, row in enumerate(rows):
-        padded = []
-        for j in range(col_count):
-            val = row[j] if j < len(row) else ""
-            cw = col_widths[j]
-            padded.append(f" {val.ljust(cw)} ")
-        
-        formatted.append("│" + "│".join(padded) + "│")
-        
-        if i == 0: # Header separator
-            mid = "├"
-            for j in range(col_count):
-                mid += "─" * (col_widths[j] + 2)
-                if j < col_count - 1: mid += "┼"
-            mid += "┤"
-            formatted.append(mid)
-    
-    # Bottom border
-    bot = "└"
-    for j in range(col_count):
-        bot += "─" * (col_widths[j] + 2)
-        if j < col_count - 1: bot += "┴"
-    bot += "┘"
-    formatted.append(bot)
-            
-    return "\n".join(formatted)
-
-
-def _split_row(line: str) -> List[str]:
-    """Split markdown table row into cells."""
-    cells = [c.strip() for c in line.split("|")]
-    # Remove empty leading/trailing cells if present
-    if cells and not cells[0]: cells.pop(0)
-    if cells and not cells[-1]: cells.pop(-1)
-    return cells
 
 
 def _strip_markdown(text: str) -> str:
