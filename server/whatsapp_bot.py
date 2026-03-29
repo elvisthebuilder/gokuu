@@ -225,11 +225,11 @@ class WhatsAppBot:
                         msg = msg.viewOnceMessageV2Extension.message
 
                     text, attachment_path, is_voice, m_type, original_filename = "", None, False, None, ""
-                    if hasattr(msg, "conversation") and msg.conversation: text = msg.conversation
-                    elif hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage: text = msg.extendedTextMessage.text
-                    elif hasattr(msg, "imageMessage") and msg.imageMessage: text, m_type = msg.imageMessage.caption, "image"
-                    elif hasattr(msg, "videoMessage") and msg.videoMessage: text, m_type = msg.videoMessage.caption, "video"
-                    elif hasattr(msg, "documentMessage") and msg.documentMessage:
+                    if msg.conversation: text = msg.conversation
+                    elif msg.HasField("extendedTextMessage"): text = msg.extendedTextMessage.text
+                    elif msg.HasField("imageMessage"): text, m_type = msg.imageMessage.caption, "image"
+                    elif msg.HasField("videoMessage"): text, m_type = msg.videoMessage.caption, "video"
+                    elif msg.HasField("documentMessage"):
                         text, m_type = msg.documentMessage.caption, "document"
                         original_filename = getattr(msg.documentMessage, "fileName", "")
                         # Forwarded voice notes and audio often arrive as Documents
@@ -240,8 +240,8 @@ class WhatsAppBot:
                         elif hasattr(msg.documentMessage, "mimetype"):
                             if "audio" in msg.documentMessage.mimetype.lower():
                                 m_type, is_voice = "audio", True
-                    elif hasattr(msg, "audioMessage") and msg.audioMessage: m_type, is_voice = "audio", True
-                    elif hasattr(msg, "stickerMessage") and msg.stickerMessage: m_type = "sticker"
+                    elif msg.HasField("audioMessage"): m_type, is_voice = "audio", True
+                    elif msg.HasField("stickerMessage"): m_type = "sticker"
 
                     if m_type:
                         try:
