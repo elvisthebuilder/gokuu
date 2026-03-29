@@ -263,7 +263,15 @@ class WhatsAppBot:
                                 from .speech_service import transcribe_audio # type: ignore
                                 transcript = await transcribe_audio(attachment_path)
                                 if transcript:
-                                    text = (text + " " + transcript).strip()
+                                    text = ("[Voice Note Transcript]: " + transcript).strip()
+                                else:
+                                    # Transcription failed — inform the user and bail out early
+                                    logger.warning(f"STT transcription failed for {attachment_path}. Notifying user.")
+                                    try:
+                                        c.send_message(raw_chat, Message(conversation="🎙️ I received your voice note, but I couldn't transcribe it. This usually means no Speech-to-Text API key (GROQ_API_KEY, ELEVENLABS_API_KEY, or OPENAI_API_KEY) is configured, or the transcription service returned an error. Please check the server logs or send a text message instead."))
+                                    except Exception as se:
+                                        logger.error(f"Failed to send STT error reply: {se}")
+                                    return
                             
                             # 2. Complete Mention Logic (now that we have transcript for voice)
                             if is_group and not mentioned:
@@ -286,7 +294,14 @@ class WhatsAppBot:
                                 mentioned = proto_m or reply_m or text_m or (is_voice and is_owner)
 
                             # 3. Identity Awareness: Prefix message with sender details
-                            p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}" if text else f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
+                            if text:
+                                p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}]: {text}"
+                            elif m_type and m_type != "audio":
+                                p_text = f"[{sender_name} (@{sender_ph}) - {sender_role}] sent a <{m_type}>"
+                            else:
+                                # Audio with no transcript should have been caught above; bail
+                                logger.warning("Voice note reached p_text construction with no text — skipping.")
+                                return
                             if is_group:
                                 p_text = f"[FROM: {sender_name}]: {p_text}"
 
@@ -319,18 +334,26 @@ class WhatsAppBot:
                             async def send_wa(resp: str):
                                 try:
                                     from server.whatsapp_formatter import format_for_whatsapp # type: ignore
+                                    formatted = format_for_whatsapp(resp)
                                     if is_voice:
                                         from .speech_service import generate_speech # type: ignore
                                         ts = time.strftime("%Y%m%d_%H%M%S")
                                         rp = os.path.join("uploads", f"wa_r_{ts}.mp3")
                                         if await generate_speech(resp, rp):
-                                            with open(rp, "rb") as af: b = af.read()
-                                            # Use audio/ogg; codecs=opus for better compatibility if possible, but mpeg is fine for now
-                                            c.send_message(raw_chat, Message(audioMessage=AudioMessage(ptt=True, mimetype="audio/mpeg", fileLength=len(b))))
-                                            try: os.remove(rp)
-                                            except: pass
+                                            try:
+                                                with open(rp, "rb") as af:
+                                                    audio_bytes = af.read()
+                                                file_len = len(audio_bytes)
+                                                audio_msg = AudioMessage(ptt=True, mimetype="audio/mpeg", fileLength=file_len)
+                                                c.send_message(raw_chat, Message(audioMessage=audio_msg))
+                                            except Exception as ae:
+                                                logger.error(f"WA audio reply error: {ae}; falling back to text.")
+                                                c.send_message(raw_chat, Message(conversation=formatted))
+                                            finally:
+                                                try: os.remove(rp)
+                                                except: pass
                                             return
-                                    c.send_message(raw_chat, Message(conversation=format_for_whatsapp(resp)))
+                                    c.send_message(raw_chat, Message(conversation=formatted))
                                 except Exception as e: logger.error(f"WA send error: {e}")
 
                             async def status_upd(s: str):

@@ -38,17 +38,17 @@ async def transcribe_audio(file_path: str) -> Optional[str]:
         logger.error(f"Audio file not found: {file_path}")
         return None
 
-    # Prefer Groq > ElevenLabs > OpenAI
-    provider = "groq"
-    if groq_api_key:
-        url = GROQ_STT_URL
-        headers = {"Authorization": f"Bearer {groq_api_key}"}
-        model = "whisper-large-v3"
-    elif elevenlabs_key:
-        provider = "elevenlabs"
+    # Prefer ElevenLabs (Scribe) > Groq > OpenAI
+    provider = "elevenlabs"
+    if elevenlabs_key:
         url = ELEVENLABS_STT_URL
         headers = {"xi-api-key": elevenlabs_key}
         model = "scribe_v1"
+    elif groq_api_key:
+        provider = "groq"
+        url = GROQ_STT_URL
+        headers = {"Authorization": f"Bearer {groq_api_key}"}
+        model = "whisper-large-v3"
     else:
         provider = "openai"
         url = OPENAI_STT_URL
