@@ -211,6 +211,19 @@ class WhatsAppBot:
                             if group_policy == "disabled" or (group_policy == "allowlist" and sender_ph not in allow_list and "*" not in allow_raw): return
                     
                     msg = message.Message
+                    
+                    # Unwrap ephemeral and view_once messages
+                    if hasattr(msg, "ephemeralMessage") and msg.ephemeralMessage and msg.ephemeralMessage.message:
+                        msg = msg.ephemeralMessage.message
+                    if hasattr(msg, "viewOnceMessage") and msg.viewOnceMessage and msg.viewOnceMessage.message:
+                        msg = msg.viewOnceMessage.message
+                    if hasattr(msg, "viewOnceMessageV2") and msg.viewOnceMessageV2 and msg.viewOnceMessageV2.message:
+                        msg = msg.viewOnceMessageV2.message
+                    if hasattr(msg, "documentWithCaptionMessage") and msg.documentWithCaptionMessage and msg.documentWithCaptionMessage.message:
+                        msg = msg.documentWithCaptionMessage.message
+                    if hasattr(msg, "viewOnceMessageV2Extension") and msg.viewOnceMessageV2Extension and msg.viewOnceMessageV2Extension.message:
+                        msg = msg.viewOnceMessageV2Extension.message
+
                     text, attachment_path, is_voice, m_type, original_filename = "", None, False, None, ""
                     if hasattr(msg, "conversation") and msg.conversation: text = msg.conversation
                     elif hasattr(msg, "extendedTextMessage") and msg.extendedTextMessage: text = msg.extendedTextMessage.text
@@ -219,6 +232,14 @@ class WhatsAppBot:
                     elif hasattr(msg, "documentMessage") and msg.documentMessage:
                         text, m_type = msg.documentMessage.caption, "document"
                         original_filename = getattr(msg.documentMessage, "fileName", "")
+                        # Forwarded voice notes and audio often arrive as Documents
+                        if original_filename:
+                            ext = original_filename.lower().split(".")[-1]
+                            if ext in ["ogg", "mp3", "m4a", "wav", "aac"]:
+                                m_type, is_voice = "audio", True
+                        elif hasattr(msg.documentMessage, "mimetype"):
+                            if "audio" in msg.documentMessage.mimetype.lower():
+                                m_type, is_voice = "audio", True
                     elif hasattr(msg, "audioMessage") and msg.audioMessage: m_type, is_voice = "audio", True
                     elif hasattr(msg, "stickerMessage") and msg.stickerMessage: m_type = "sticker"
 
