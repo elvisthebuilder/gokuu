@@ -208,33 +208,47 @@ class VectorMemory:
             return []
 
         collection_name = _safe_collection_name(persona_name)
-        if collection_name not in self._known_collections:
-            return []
+        
+        async def _fetch_from_collection(c_name: str) -> List[Dict[str, Any]]:
+            if c_name not in self._known_collections:
+                # Sync collections from client if missing
+                try:
+                    cols_resp = self.client.get_collections()
+                    self._known_collections = {c.name: 768 for c in cols_resp.collections}
+                    if c_name not in self._known_collections: return []
+                except: return []
 
-        try:
-            # Use scroll to fetch points filtered by metadata.group
-            results, _ = self.client.scroll(
-                collection_name=collection_name,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="metadata.group",
-                            match=models.MatchValue(value=jid),
-                        )
-                    ]
-                ),
-                limit=limit,
-                with_payload=True,
-                with_vectors=False,
-            )
+            try:
+                # Use scroll to fetch points filtered by metadata.group
+                res_scroll, _ = self.client.scroll(
+                    collection_name=c_name,
+                    scroll_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="metadata.group",
+                                match=models.MatchValue(value=jid),
+                            )
+                        ]
+                    ),
+                    limit=limit,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                payloads = [getattr(r, 'payload', {}) for r in res_scroll if hasattr(r, 'payload')]
+                return sorted(payloads, key=lambda x: x.get("timestamp", 0), reverse=True)
+            except Exception as e:
+                logger.error(f"Memory Error (scroll) [{c_name}]: {e}")
+                return []
+
+        # 1. Try primary (isolated) collection
+        results = await _fetch_from_collection(collection_name)
+        
+        # 2. Legacy Fallback: If no results and this is a group collection, try the default persona collection
+        if not results and (persona_name.startswith("group_") or "@g.us" in jid):
+            logger.debug(f"Memory: No isolated results for {persona_name}, trying legacy fallback (GOKU_DEFAULT_PERSONA)...")
+            results = await _fetch_from_collection(_safe_collection_name(GOKU_DEFAULT_PERSONA))
             
-            # Sort by timestamp descending (newest first)
-            payloads = [getattr(r, 'payload', {}) for r in results if hasattr(r, 'payload')]
-            sorted_payloads = sorted(payloads, key=lambda x: x.get("timestamp", 0), reverse=True)
-            return sorted_payloads
-        except Exception as e:
-            logger.error(f"Memory Error (scroll) [{persona_name}]: {e}")
-            return []
+        return results
 
 
 def _extract_file_text(file_path: str) -> str:

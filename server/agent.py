@@ -1498,7 +1498,10 @@ class GokuAgent:
                             time_str = time.strftime('%H:%M', time.localtime(ts))
                             formatted_history.append(f"[{time_str}] {sender}: {text}")
                         
-                        result = {"status": "success", "history": formatted_history, "jid": target_jid}
+                        if not formatted_history:
+                            result = {"status": "success", "message": f"I checked the history for {target} ({target_jid}), but it appears to be empty or hasn't been synced to my isolated group memory yet.", "history": []}
+                        else:
+                            result = {"status": "success", "history": formatted_history, "jid": target_jid}
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "get_chat_details":
                     target = tool_args.get("target")
@@ -1713,16 +1716,18 @@ class GokuAgent:
 
         # Isolation: Group chats get their own dedicated memory collection
         mem_persona = active_persona_name
+        mem_metadata = {"type": "user_query", "source": source, "session_id": session_id}
         if is_group and source == "whatsapp":
              chat_jid = session_id.replace("wa_", "")
              mem_persona = f"group_{chat_jid}"
+             mem_metadata["group"] = chat_jid
 
         # Store this interaction into the persona's isolated memory collection
         await memory.add_memory(
             text=user_text,
             images=photos if photos else None,
             file_path=file_to_embed,
-            metadata={"type": "user_query", "source": source, "session_id": session_id},
+            metadata=mem_metadata,
             persona_name=mem_persona,
         )
 
