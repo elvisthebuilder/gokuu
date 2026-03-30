@@ -1803,7 +1803,7 @@ class GokuAgent:
         file_to_embed = file_paths[0] if file_paths else None
 
         # Isolation: Group chats get their own dedicated memory collection
-        mem_persona = active_persona_name
+        mem_persona = assigned_persona_name
         mem_metadata = {"type": "user_query", "source": source, "session_id": session_id}
         if is_group and source == "whatsapp":
              chat_jid = session_id.replace("wa_", "")
