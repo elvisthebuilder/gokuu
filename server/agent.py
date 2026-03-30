@@ -1465,9 +1465,10 @@ class GokuAgent:
                                 continue
                         
                         # Use group-specific memory if target is a group
-                        active_persona = f"group_{target_jid}" if "@g.us" in target_jid else GOKU_DEFAULT_PERSONA
+                        target_jid_str = str(target_jid or "")
+                        active_persona = f"group_{target_jid_str}" if "@g.us" in target_jid_str else GOKU_DEFAULT_PERSONA
                         try:
-                            if "@g.us" not in target_jid:
+                            if "@g.us" not in target_jid_str:
                                 mappings = personality_manager.get_all_mappings()
                                 # Use session_id to resolve jid if not explicitly provided
                                 current_jid = session_id.replace('wa_', '')
