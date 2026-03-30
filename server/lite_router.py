@@ -161,8 +161,8 @@ class LiteRouter:
         # Slicing the sub-list (excluding system) if too long
         start_idx = 1 if system_msg else 0
         payload = messages[start_idx:]
-        if len(payload) > 20:
-            payload = payload[-20:]
+        if len(payload) > 40:
+            payload = payload[-40:]
             
         trimmed_messages = ([system_msg] if system_msg else []) + payload
         ollama_messages = copy.deepcopy(trimmed_messages)
