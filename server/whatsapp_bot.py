@@ -141,6 +141,64 @@ class WhatsAppBot:
                 m = USER_JID_RE.match(jid) or LID_RE.match(jid)
                 return m.group(1) if m else jid.split("@")[0].split(":")[0]
 
+            from neonize.proto.Neonize_pb2 import HistorySync as HistorySyncEv # type: ignore
+            
+            @client.event(HistorySyncEv)
+            def on_history_sync(c: NewClient, e: HistorySyncEv): # type: ignore
+                """
+                Backfills the isolated group memory using historical messages 
+                provided by WhatsApp during the initial sync.
+                """
+                try:
+                    logger.info("⏳ WhatsApp History Sync started...")
+                    sync_data = e.Data
+                    
+                    # HistorySync contains conversations, which contain messages
+                    for conv in sync_data.conversations:
+                        chat_jid = conv.id
+                        is_group = "@g.us" in chat_jid
+                        
+                        if is_group:
+                            mem_persona = f"group_{chat_jid}"
+                            logger.debug(f"📜 Backfilling group history for {chat_jid}...")
+                            
+                            for h_msg in conv.messages:
+                                msg = h_msg.message
+                                info = msg.key
+                                sender_ph = info.participant.split("@")[0] if info.participant else ""
+                                
+                                # Basic text extraction from historical messages
+                                text = ""
+                                if msg.message.conversation: text = msg.message.conversation
+                                elif msg.message.extendedTextMessage.text: text = msg.message.extendedTextMessage.text
+                                
+                                if text:
+                                    # Use the memory module directly to avoid triggering the agent loop
+                                    import asyncio
+                                    from server.memory import memory # type: ignore
+                                    
+                                    # We use a non-blocking way to add to Qdrant (since we are in a sync callback)
+                                    # Note: In production, we'd use a worker queue.
+                                    async def record_historical():
+                                        await memory.add_memory(
+                                            text=f"[Historical] {text}",
+                                            persona_name=mem_persona,
+                                            metadata={
+                                                "sender": sender_ph, 
+                                                "group": chat_jid, 
+                                                "passive": True,
+                                                "timestamp": h_msg.messageTimestamp
+                                            }
+                                        )
+                                    
+                                    ml = self.main_loop
+                                    if ml and not ml.is_closed():
+                                        asyncio.run_coroutine_threadsafe(record_historical(), ml)
+                                        
+                    logger.info("✅ WhatsApp History Sync processed and backfilled.")
+                except Exception as ex:
+                    logger.error(f"❌ History Sync Error: {ex}", exc_info=True)
+
             @client.event(MessageEv)
             def on_message_sync(c: NewClient, message: MessageEv): # type: ignore
                 try:

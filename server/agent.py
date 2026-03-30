@@ -435,7 +435,18 @@ class GokuAgent:
             is_group: Whether the message is from a group chat.
         """
         self._trim_history(session_id)
+        
+        # --- Hallucination Guard ---
+        # If user_text is empty or ONLY contains technical metadata/passive records, do NOT respond.
+        # This prevents the AI from "noticing" background sync messages as actual user input.
         if not user_text:
+            return
+        
+        # Check if the content is JUST passive records or metadata tags
+        content_stripped = re_.sub(r'\[Passive Record\].*?(\n|$)', '', user_text).strip()
+        content_stripped = re_.sub(r'\[Historical\].*?(\n|$)', '', content_stripped).strip()
+        if not content_stripped:
+            logger.debug(f"Ignoring metadata-only message for session {session_id}")
             return
 
         # Initialize session state if first time
@@ -721,18 +732,39 @@ class GokuAgent:
         except Exception as e:
             logger.error(f"Security state error: {e}")
 
-        # 1. Resolve active persona name for memory scoping
-        # Get the NAME of the assigned persona (not its content). We use the mappings
-        # to find which named persona is active, defaulting to 'goku_default' for bare sessions.
-        active_persona_name: str = GOKU_DEFAULT_PERSONA
+        # 1. Resolve active persona name for memory scoping and instructions
+        # Logic: 
+        # - If it's a group, we ALWAYS use f"group_{jid}" for isolated memory storage (Qdrant).
+        # - But we use the ASSIGNED persona (e.g. 'pirate') for the system instructions.
+        
+        assigned_persona: str = GOKU_DEFAULT_PERSONA
         all_mappings = personality_manager.get_all_mappings()
-        for mapped_target, mapped_persona_name in all_mappings.items():
-            if session_id == mapped_target or source == mapped_target:
-                active_persona_name = str(mapped_persona_name)
-                break
+        
+        # Check for specific session mapping first, then source mapping
+        for target in [session_id, source]:
+             # Ensure we check both raw session_id and prefixed versions
+             for key in [target, f"{source}:{target.replace('wa_', '').replace('tg_', '')}"]:
+                 if key in all_mappings:
+                     assigned_persona = str(all_mappings[key])
+                     break
+             if assigned_persona != GOKU_DEFAULT_PERSONA: break
+
+        # Memory Isolation: Group chats get their own bucket regardless of persona instructions
+        active_persona_name: str = assigned_persona
+        if is_group and source == "whatsapp":
+             chat_jid = session_id.replace("wa_", "")
+             # We store the 'assigned' persona in a variable for instructions, 
+             # but we'll use 'group_{jid}' for memory operations later.
+             # Actually, let's keep active_persona_name as the pointer for INSTRUCTIONS.
+             pass
 
         # 2. Retrieve past context from THIS persona's isolated memory
-        context = await memory.search_memory(user_text, persona_name=active_persona_name)
+        # Isolation: Groups always search their own dedicated bucket.
+        mem_search_persona = active_persona_name
+        if is_group and source == "whatsapp":
+             mem_search_persona = f"group_{session_id.replace('wa_', '')}"
+             
+        context = await memory.search_memory(user_text, persona_name=mem_search_persona)
         
         # Include lessons learned in context
         if self._lessons_learned:
@@ -841,8 +873,10 @@ class GokuAgent:
         
         history = self.histories[session_id]
         
-        # Don't add if it's purely a Passive Record or a system marker that shouldn't be in short-term memory
-        if "[Passive Record]" in str(user_text):
+        # Logic: We keep Passive Records in the isolated database (Qdrant), 
+        # but we EXCLUDE them from the short-term context (self.histories) 
+        # unless the user explicitly asks to catch up.
+        if "[Passive Record]" in str(user_text) or "[Historical]" in str(user_text):
             return
             
         if not str(user_text).strip():
@@ -862,22 +896,6 @@ class GokuAgent:
             for t in all_tools if "type" in t and "function" in t
         ]
 
-        # Add summarization tool for long threads
-        llm_tools.append({
-            "type": "function",
-            "function": {
-                "name": "summarize_discussion",
-                "description": "Generate a concise summary of a long block of text (like a chat history or a long document). Use this to digest group threads.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string", "description": "The raw text or history to summarize."},
-                        "focus": {"type": "string", "description": "Optional: What to focus the summary on (e.g. 'team roles', 'deadlines')."}
-                    },
-                    "required": ["text"]
-                }
-            }
-        })
         
         # Add internal task management tool
         llm_tools.append({
@@ -1044,6 +1062,28 @@ class GokuAgent:
                         "type": "object",
                         "properties": {},
                         "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "summarize_discussion",
+                    "description": "Condense a long conversation history (e.g. 50+ messages) into a concise bullet-point summary. Use this to catch up on what has been discussed in a group without reading raw logs.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target": {
+                                "type": "string",
+                                "description": "The JID (e.g. '120363...@g.us') or name (e.g. '@General') of the chat to summarize."
+                            },
+                            "count": {
+                                "type": "integer",
+                                "description": "Number of recent messages to include in the summary (default 50).",
+                                "default": 50
+                            }
+                        },
+                        "required": ["target"]
                     }
                 }
             },
@@ -1453,6 +1493,61 @@ class GokuAgent:
                     
                     result = {"status": "success", "groups": safe_groups}
                     
+                    self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                elif tool_name == "summarize_discussion":
+                    target = tool_args.get("target")
+                    count = tool_args.get("count", 50)
+                    if not target:
+                        result = {"status": "error", "message": "Missing 'target' for summary."}
+                    else:
+                        target_jid = target
+                        if target.startswith("@"):
+                            groups = await channel_broker.get_groups(source)
+                            search_name = target[1:].lower().strip()
+                            best_match = None
+                            for g in groups:
+                                name = str(g.get("name", "")).lower()
+                                if search_name in name or name in search_name:
+                                    best_match = g.get("jid")
+                                    break
+                            if best_match: target_jid = best_match
+                            else:
+                                result = {"status": "error", "message": f"Could not find group matching '{target}'"}
+                                self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
+                                continue
+                        
+                        # Fetch history from isolated group memory
+                        target_jid_str = str(target_jid or "")
+                        active_persona = f"group_{target_jid_str}" if "@g.us" in target_jid_str else GOKU_DEFAULT_PERSONA
+                        history = await memory.get_recent_messages(target_jid, limit=count, persona_name=active_persona)
+                        
+                        if not history:
+                            # Fallback check for global if group is empty
+                            history = await memory.get_recent_messages(target_jid, limit=count)
+                        
+                        if not history:
+                            result = {"status": "success", "message": "No history found to summarize."}
+                        else:
+                            # 1. Format history for LLM
+                            hist_text = "\n".join([f"{h.get('metadata', {}).get('sender', 'Unknown')}: {h.get('text', '')}" for h in history])
+                            
+                            # 2. Call LLM to summarize
+                            summary_prompt = "Summarize the following conversation in concise bullet points. Focus on key topics, questions, and decisions. Return ONLY the bullet points."
+                            try:
+                                yield {"type": "thought", "content": f"Summarizing {len(history)} messages for {target}..."}
+                                response = await router.get_response(
+                                    model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
+                                    messages=[{"role": "system", "content": summary_prompt}, {"role": "user", "content": hist_text}],
+                                    stream=False
+                                )
+                                if response.choices:
+                                    summary = response.choices[0].message.content.strip() # type: ignore
+                                    result = {"status": "success", "summary": summary, "jid": target_jid}
+                                else:
+                                    result = {"status": "error", "message": "LLM failed to generate summary."}
+                            except Exception as e:
+                                result = {"status": "error", "message": f"Summary error: {e}"}
+                                
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "fetch_chat_history":
                     target = tool_args.get("target")
