@@ -416,6 +416,8 @@ class GokuAgent:
             
             # Non-streaming call for description
             response = await router.get_response(model=model, messages=messages, stream=False)
+            if not response.choices:
+                return "[Error: Vision model returned no content]"
             description = response.choices[0].message.content
             return description
         except Exception as e:
@@ -486,6 +488,10 @@ class GokuAgent:
                     messages=[{"role": "system", "content": summary_prompt}, {"role": "user", "content": hist_text}],
                     stream=False
                 )
+                if not response.choices:
+                    yield {"type": "message", "role": "agent", "content": "Failed to generate summary (no choices returned from LLM)."}
+                    return
+                    
                 summary = response.choices[0].message.content.strip() # type: ignore
                 
                 # 3. Wipe and replace
@@ -575,6 +581,9 @@ class GokuAgent:
                         messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": clean_text}],
                         stream=False
                     )
+                    if not response.choices:
+                        yield {"type": "message", "role": "agent", "content": "⚠️ Failed to generate prompt (empty response from LLM)."}
+                        return
                     generated_prompt = response.choices[0].message.content.strip() # type: ignore
                     p_state["data"]["prompt"] = generated_prompt
                     p_state["step"] = "create_name"
@@ -746,12 +755,16 @@ class GokuAgent:
         full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}"
         
         # Ensure we have a system message if history is empty
-        if not self.histories[session_id]:
-            self.histories[session_id].append({"role": "system", "content": full_system_prompt})
+        history = self.histories[session_id]
+        if not history:
+            history.append({"role": "system", "content": full_system_prompt})
         else:
-            # Update the existing system message if it exists
-            if self.histories[session_id][0]["role"] == "system":
-                self.histories[session_id][0]["content"] = full_system_prompt
+            # Update the existing system message if it exists as the first element
+            if history[0].get("role") == "system":
+                history[0]["content"] = full_system_prompt
+            else:
+                # If first message isn't system (unexpected), insert it at front
+                history.insert(0, {"role": "system", "content": full_system_prompt})
 
         # Local history reference for current loop
         history = self.histories[session_id]
@@ -1668,7 +1681,10 @@ class GokuAgent:
                                     messages=[{"role": "system", "content": sum_sys}, {"role": "user", "content": text_to_sum}],
                                     stream=False
                                 )
-                                result = {"status": "success", "summary": sum_resp.choices[0].message.content.strip()} # type: ignore
+                                if not sum_resp.choices:
+                                    result = {"error": "Failed to generate summary (empty response)."}
+                                else:
+                                    result = {"status": "success", "summary": sum_resp.choices[0].message.content.strip()} # type: ignore
                         elif tool_name.startswith("openclaw_"):
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")

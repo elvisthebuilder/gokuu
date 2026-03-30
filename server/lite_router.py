@@ -156,7 +156,7 @@ class LiteRouter:
         """Deep copy and convert tool arguments and multimodal content for Ollama."""
         # 1. Trim history to prevent massive context bloat while PRESERVING the system message
         # Ensure the first message (system) is always kept if it exists
-        system_msg = messages[0] if messages[0].get("role") == "system" else None
+        system_msg = messages[0] if (messages and messages[0].get("role") == "system") else None
         
         # Slicing the sub-list (excluding system) using list comprehension to satisfy strict linter
         msgs_list = list(messages)
