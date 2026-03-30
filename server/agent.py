@@ -467,6 +467,37 @@ class GokuAgent:
             yield {"type": "message", "role": "agent", "content": menu}
             return
 
+        if clean_text.lower() == "/compact":
+            yield {"type": "thought", "content": "Compacting conversation history into a summary..."}
+            try:
+                # 1. Fetch current history (excluding system prompt)
+                msgs = self.histories.get(session_id, [])
+                content_only = [m for m in msgs if m.get("role") != "system" and "[Passive Record]" not in str(m.get("content", ""))]
+                if not content_only:
+                    yield {"type": "message", "role": "agent", "content": "The history is already empty or too short to compact."}
+                    return
+                
+                # 2. Ask LLM to summarize
+                summary_prompt = "Summarize the following conversation history in 3-5 concise bullet points. Focus on key decisions, questions asked, and the current state of the discussion. Return ONLY the summary."
+                hist_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in content_only])
+                
+                response = await router.get_response(
+                    model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
+                    messages=[{"role": "system", "content": summary_prompt}, {"role": "user", "content": hist_text}],
+                    stream=False
+                )
+                summary = response.choices[0].message.content.strip() # type: ignore
+                
+                # 3. Wipe and replace
+                system_msg = next((m for m in msgs if m.get("role") == "system"), None)
+                self.histories[session_id] = ([system_msg] if system_msg else []) + [
+                    {"role": "user", "content": f"[SYSTEM: CONVERSATION SUMMARY BEGINS]\nHere is a recap of our discussion so far:\n{summary}\n[SYSTEM: CONVERSATION SUMMARY ENDS]"}
+                ]
+                yield {"type": "message", "role": "agent", "content": f"🧹 **History Compacted!**\n\nI've cleared the raw messages to save memory, but I've kept a summary of what we've discussed:\n\n{summary}"}
+            except Exception as e:
+                yield {"type": "message", "role": "agent", "content": f"❌ Failed to compact history: {e}"}
+            return
+
         if p_state["active"]:
             step = p_state["step"]
             lower_text = clean_text.lower()
@@ -791,11 +822,20 @@ class GokuAgent:
                         logger.error(f"Failed to load image for vision: {e}")
                         content_array.append({"type": "text", "text": f"[Error loading image: {path}]"})
             
-            # Add placeholders for non-image attachments so the agent knows they exist
-            others = [p for p in all_attachments if p not in photos]
-            for p in others:
-                content_array.append({"type": "text", "text": f"[File Received: {p}] (Please use the 'analyze_document' tool to read/analyze this file)"})
+        # 1. Update history (Filtering out metadata bloat like Passive Records)
+        if session_id not in self.histories:
+            self.histories[session_id] = []
+        
+        history = self.histories[session_id]
+        
+        # Don't add if it's purely a Passive Record or a system marker that shouldn't be in short-term memory
+        if "[Passive Record]" in str(user_text):
+            return
             
+        if not str(user_text).strip():
+            return
+
+        if all_attachments:
             history.append({"role": "user", "content": content_array})
         else:
             history.append({"role": "user", "content": user_text})
@@ -808,6 +848,23 @@ class GokuAgent:
             {"type": t["type"], "function": t["function"]} 
             for t in all_tools if "type" in t and "function" in t
         ]
+
+        # Add summarization tool for long threads
+        llm_tools.append({
+            "type": "function",
+            "function": {
+                "name": "summarize_discussion",
+                "description": "Generate a concise summary of a long block of text (like a chat history or a long document). Use this to digest group threads.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The raw text or history to summarize."},
+                        "focus": {"type": "string", "description": "Optional: What to focus the summary on (e.g. 'team roles', 'deadlines')."}
+                    },
+                    "required": ["text"]
+                }
+            }
+        })
         
         # Add internal task management tool
         llm_tools.append({
@@ -1407,13 +1464,14 @@ class GokuAgent:
                                 self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                                 continue
                         
-                        # Use current persona if available for memory scope
-                        active_persona = GOKU_DEFAULT_PERSONA
+                        # Use group-specific memory if target is a group
+                        active_persona = f"group_{target_jid}" if "@g.us" in target_jid else GOKU_DEFAULT_PERSONA
                         try:
-                            mappings = personality_manager.get_all_mappings()
-                            # Use session_id to resolve jid if not explicitly provided
-                            current_jid = session_id.replace('wa_', '')
-                            active_persona = mappings.get(f"whatsapp:{current_jid}") or mappings.get("whatsapp") or GOKU_DEFAULT_PERSONA
+                            if "@g.us" not in target_jid:
+                                mappings = personality_manager.get_all_mappings()
+                                # Use session_id to resolve jid if not explicitly provided
+                                current_jid = session_id.replace('wa_', '')
+                                active_persona = mappings.get(f"whatsapp:{current_jid}") or mappings.get("whatsapp") or GOKU_DEFAULT_PERSONA
                         except: pass
                         
                         history = await memory.get_recent_messages(target_jid, limit=count, persona_name=active_persona)
@@ -1596,6 +1654,20 @@ class GokuAgent:
                         elif tool_name == "complete_implementation":
                             summary = tool_args.get("summary", "")
                             result = {"status": "success", "message": f"Implementation marked complete: {summary[:50]}..."}
+                        elif tool_name == "summarize_discussion":
+                            text_to_sum = tool_args.get("text", "")
+                            focus = tool_args.get("focus", "general points")
+                            if not text_to_sum:
+                                result = {"error": "No text provided for summarization."}
+                            else:
+                                yield {"type": "thought", "content": f"📝 Summarizing discussion with focus on: {focus}..."}
+                                sum_sys = f"You are a summarization assistant. Summarize the provided text into a concise list of bullet points. Focus purely on: {focus}. Return ONLY the summary."
+                                sum_resp = await router.get_response(
+                                    model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
+                                    messages=[{"role": "system", "content": sum_sys}, {"role": "user", "content": text_to_sum}],
+                                    stream=False
+                                )
+                                result = {"status": "success", "summary": sum_resp.choices[0].message.content.strip()} # type: ignore
                         elif tool_name.startswith("openclaw_"):
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")
@@ -1622,13 +1694,19 @@ class GokuAgent:
         file_paths = re_.findall(file_pattern, user_text)  # type: ignore
         file_to_embed = file_paths[0] if file_paths else None
 
+        # Isolation: Group chats get their own dedicated memory collection
+        mem_persona = active_persona_name
+        if is_group and source == "whatsapp":
+             chat_jid = session_id.replace("wa_", "")
+             mem_persona = f"group_{chat_jid}"
+
         # Store this interaction into the persona's isolated memory collection
         await memory.add_memory(
             text=user_text,
             images=photos if photos else None,
             file_path=file_to_embed,
             metadata={"type": "user_query", "source": source, "session_id": session_id},
-            persona_name=active_persona_name,
+            persona_name=mem_persona,
         )
 
     async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):

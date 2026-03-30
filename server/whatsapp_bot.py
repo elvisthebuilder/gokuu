@@ -341,7 +341,9 @@ class WhatsAppBot:
                                     assigned_persona = mappings.get(f"whatsapp:{chat_jid}") or mappings.get("whatsapp")
                                 except: pass
                                 
-                                target_persona = assigned_persona or GOKU_DEFAULT_PERSONA
+                                # Isolation: Group chats get their own dedicated memory namespace
+                                target_persona = f"group_{chat_jid}" if is_group else (assigned_persona or GOKU_DEFAULT_PERSONA)
+                                
                                 await memory.add_memory(
                                     text=f"[Passive Record] {text or f'<{m_type}>'}", 
                                     persona_name=target_persona, 
