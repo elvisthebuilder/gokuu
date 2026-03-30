@@ -734,37 +734,27 @@ class GokuAgent:
 
         # 1. Resolve active persona name for memory scoping and instructions
         # Logic: 
-        # - If it's a group, we ALWAYS use f"group_{jid}" for isolated memory storage (Qdrant).
-        # - But we use the ASSIGNED persona (e.g. 'pirate') for the system instructions.
+        # - We search for a specific mapping (session or source).
+        # - If it's a group, we use that persona for instructions but isolated group collection for memory.
         
-        assigned_persona: str = GOKU_DEFAULT_PERSONA
+        assigned_persona_name: str = GOKU_DEFAULT_PERSONA
         all_mappings = personality_manager.get_all_mappings()
         
-        # Check for specific session mapping first, then source mapping
+        # Priority mapping lookup
         for target in [session_id, source]:
-             # Ensure we check both raw session_id and prefixed versions
              for key in [target, f"{source}:{target.replace('wa_', '').replace('tg_', '')}"]:
                  if key in all_mappings:
-                     assigned_persona = str(all_mappings[key])
+                     assigned_persona_name = str(all_mappings[key])
                      break
-             if assigned_persona != GOKU_DEFAULT_PERSONA: break
+             if assigned_persona_name != GOKU_DEFAULT_PERSONA: break
 
-        # Memory Isolation: Group chats get their own bucket regardless of persona instructions
-        active_persona_name: str = assigned_persona
+        # Memory Isolation Collection Name
+        active_memory_persona = assigned_persona_name
         if is_group and source == "whatsapp":
-             chat_jid = session_id.replace("wa_", "")
-             # We store the 'assigned' persona in a variable for instructions, 
-             # but we'll use 'group_{jid}' for memory operations later.
-             # Actually, let's keep active_persona_name as the pointer for INSTRUCTIONS.
-             pass
+             active_memory_persona = f"group_{session_id.replace('wa_', '')}"
 
         # 2. Retrieve past context from THIS persona's isolated memory
-        # Isolation: Groups always search their own dedicated bucket.
-        mem_search_persona = active_persona_name
-        if is_group and source == "whatsapp":
-             mem_search_persona = f"group_{session_id.replace('wa_', '')}"
-             
-        context = await memory.search_memory(user_text, persona_name=mem_search_persona)
+        context = await memory.search_memory(user_text, persona_name=active_memory_persona)
         
         # Include lessons learned in context
         if self._lessons_learned:
@@ -774,16 +764,19 @@ class GokuAgent:
         else:
             context_str = json.dumps(context) if context else ""
         
-        # Check for custom personality mapping
-        custom_persona = personality_manager.get_assigned_personality_for(source, session_id)
-        if custom_persona:
-            base_prompt = custom_persona
+        # Check for custom personality mapping content
+        custom_persona_text = personality_manager.get_personality_text(assigned_persona_name)
+        if custom_persona_text:
+            # Identity Injection: Explicitly tell the AI its name
+            name_label = assigned_persona_name.upper().replace("_", " ")
+            identity_header = f"You are {name_label}.\nYour identity and tone are defined by the following instructions:\n{custom_persona_text}\n\n---\n"
+            base_prompt = f"{identity_header}\n{self.system_prompt}"
         else:
             base_prompt = self.system_prompt
             
         # Build environment-aware system prompt with memory context
         env_context = self._get_environment_context(source, is_group=is_group)
-        memory_section = f"\n\n---\n🧠 **Relevant Memory ({active_persona_name}):**\n{context_str}" if context_str else ""
+        memory_section = f"\n\n---\n🧠 **Relevant Memory ({assigned_persona_name}):**\n{context_str}" if context_str else ""
         full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}"
         
         # Ensure we have a system message if history is empty
