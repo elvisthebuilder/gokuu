@@ -158,12 +158,12 @@ class LiteRouter:
         # Ensure the first message (system) is always kept if it exists
         system_msg = messages[0] if messages[0].get("role") == "system" else None
         
-        # Slicing the sub-list (excluding system) if too long
+        # Slicing the sub-list (excluding system) using list comprehension to satisfy strict linter
         msgs_list = list(messages)
         start_idx = 1 if system_msg else 0
-        payload = msgs_list[start_idx:]
+        payload = [msgs_list[i] for i in range(start_idx, len(msgs_list))]
         if len(payload) > 40:
-            payload = payload[-40:]
+            payload = payload[-40:] # type: ignore
             
         trimmed_messages = ([system_msg] if system_msg else []) + payload
         ollama_messages = copy.deepcopy(trimmed_messages)
@@ -781,16 +781,15 @@ class LiteRouter:
                 content = _gtypes.Content(parts=parts)
                 config = _gtypes.EmbedContentConfig(output_dimensionality=1536)
 
-                # Run synchronous SDK call in a thread pool
-                from functools import partial
+                # Run synchronous SDK call in a thread pool using a named function
                 loop = asyncio.get_event_loop()
-                fn = partial(
-                    client.models.embed_content,
-                    model="gemini-embedding-2-preview",
-                    contents=[content],
-                    config=config
-                )
-                result = await loop.run_in_executor(None, fn)
+                def _do_embedding():
+                    return client.models.embed_content(
+                        model="gemini-embedding-2-preview",
+                        contents=[content],
+                        config=config
+                    )
+                result = await loop.run_in_executor(None, _do_embedding)  # type: ignore[arg-type]
                 vector = list(result.embeddings[0].values)
                 logger.info(f"Multimodal embedding generated (parts={len(parts)}, dim={len(vector)})")
                 return vector
