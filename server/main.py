@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Enable debug logging for our trace modules

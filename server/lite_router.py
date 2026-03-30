@@ -548,6 +548,8 @@ class LiteRouter:
         if tools:
             body["tools"] = tools
         
+        full_body = str(json.dumps(body, indent=2))
+        logger.debug(f"Ollama Request Body: {full_body[:1500]}...")
         logger.info(f"Ollama streaming call: {chat_url} model={model_name}")
         
         async with httpx.AsyncClient(timeout=300.0) as client:

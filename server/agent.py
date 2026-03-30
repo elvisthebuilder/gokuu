@@ -36,7 +36,7 @@ class GokuAgent:
         self._skill_definitions: Optional[List[Dict[str, Any]]] = None
         self._last_skill_refresh: float = 0.0
         self.system_prompt = (
-            "You are GOKU — a high-performance AI terminal agent built for precise execution, "
+            "You are {AI_NAME} — a high-performance AI terminal agent built for precise execution, "
             "intelligent planning, and resilient problem solving.\n\n"
 
             "You operate as an autonomous collaborator whose goal is to complete user objectives "
@@ -168,7 +168,9 @@ class GokuAgent:
             "• ALWAYS provide a brief, conversational summary of what was accomplished.\n"
             "• Example Good: 'I've checked the directory and found the `uploads` folder as requested.'\n"
             "• Example Bad: 'Finished.' or 'Done.'\n"
-            "• NEVER say 'Waiting for your next request'. Just provide the result naturally.\n\n"
+            "• NEVER introduce yourself as 'Qwen', 'MiniMax', or any other AI model name. You are {AI_NAME}.\n"
+            "• AVOID canned, generic introductions like 'I am your helpful AI assistant' or 'I am here to help you with...'.\n"
+            "• Address the user's specific request immediately without repeating your capabilities unless asked.\n\n"
             
             "19️⃣ CLARIFICATION & AMBIGUITY\n"
             "• If a user request is missing critical information, ASK for it immediately.\n"
@@ -766,13 +768,15 @@ class GokuAgent:
         
         # Check for custom personality mapping content
         custom_persona_text = personality_manager.get_personality_text(assigned_persona_name)
+        
+        # Prepare the base name and instructions
+        name_label = assigned_persona_name.upper().replace("_", " ")
         if custom_persona_text:
             # Identity Injection: Explicitly tell the AI its name
-            name_label = assigned_persona_name.upper().replace("_", " ")
             identity_header = f"You are {name_label}.\nYour identity and tone are defined by the following instructions:\n{custom_persona_text}\n\n---\n"
-            base_prompt = f"{identity_header}\n{self.system_prompt}"
+            base_prompt = f"{identity_header}\n{self.system_prompt.replace('{AI_NAME}', name_label)}"
         else:
-            base_prompt = self.system_prompt
+            base_prompt = self.system_prompt.replace("{AI_NAME}", "GOKU")
             
         # Build environment-aware system prompt with memory context
         env_context = self._get_environment_context(source, is_group=is_group)
@@ -876,9 +880,18 @@ class GokuAgent:
             return
 
         if all_attachments:
+            # Inline identity reinforcement for the first message of a session
+            if len(history) == 1:
+                for i, part in enumerate(content_array):
+                    if part.get("type") == "text":
+                        content_array[i]["text"] = f"[SYSTEM: Act as {name_label}]\n{part.get('text', '')}"
+                        break
             history.append({"role": "user", "content": content_array})
         else:
-            history.append({"role": "user", "content": user_text})
+            final_user_text = user_text
+            if len(history) == 1:
+                final_user_text = f"[SYSTEM: Act as {name_label}]\n{user_text}"
+            history.append({"role": "user", "content": final_user_text})
         
         # 2. MCP & Model Routing
         all_tools = await mcp_manager.get_all_tools()
