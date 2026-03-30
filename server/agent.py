@@ -772,8 +772,9 @@ class GokuAgent:
         # Prepare the base name and instructions
         name_label = assigned_persona_name.upper().replace("_", " ")
         if custom_persona_text:
-            # Identity Injection: Explicitly tell the AI its name
-            identity_header = f"You are {name_label}.\nYour identity and tone are defined by the following instructions:\n{custom_persona_text}\n\n---\n"
+            # Identity Injection: Explicitly tell the AI its name and role in the system prompt
+            # We use a very strict header to lock the model into this persona
+            identity_header = f"IDENTITY: You are {name_label}.\nYour personality and behavior are governed by these instructions:\n{custom_persona_text}\n\n---\n"
             base_prompt = f"{identity_header}\n{self.system_prompt.replace('{AI_NAME}', name_label)}"
         else:
             base_prompt = self.system_prompt.replace("{AI_NAME}", "GOKU")
@@ -781,21 +782,22 @@ class GokuAgent:
         # Build environment-aware system prompt with memory context
         env_context = self._get_environment_context(source, is_group=is_group)
         memory_section = f"\n\n---\n🧠 **Relevant Memory ({assigned_persona_name}):**\n{context_str}" if context_str else ""
-        full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}"
         
-        # Ensure we have a system message if history is empty
-        history = self.histories[session_id]
-        if not history:
-            history.append({"role": "system", "content": full_system_prompt})
+        # Identity Reinforcement: Solidify the persona at the end of the system prompt
+        reinforcement = f"\n\nREMEMBER: You are {name_label}. Your identity is absolute. Do not ever identify as 'Qwen', 'MiniMax', or a generic AI assistant."
+        full_system_prompt = f"{base_prompt}\n\n{env_context}{memory_section}{reinforcement}"
+        
+        # Ensure we have a system message (ALWAYS update it to ensure latest persona is active)
+        if session_id not in self.histories or not self.histories[session_id]:
+            self.histories[session_id] = [{"role": "system", "content": full_system_prompt}]
         else:
-            # Update the existing system message if it exists as the first element
-            if history[0].get("role") == "system":
+            # Update existing system prompt if it exists, otherwise insert it
+            history = self.histories[session_id]
+            if history and history[0].get("role") == "system":
                 history[0]["content"] = full_system_prompt
             else:
-                # If first message isn't system (unexpected), insert it at front
                 history.insert(0, {"role": "system", "content": full_system_prompt})
-
-        # Local history reference for current loop
+            
         history = self.histories[session_id]
 
         # Parse potential image attachments for Vision models
@@ -880,18 +882,9 @@ class GokuAgent:
             return
 
         if all_attachments:
-            # Inline identity reinforcement for the first message of a session
-            if len(history) == 1:
-                for i, part in enumerate(content_array):
-                    if part.get("type") == "text":
-                        content_array[i]["text"] = f"[SYSTEM: Act as {name_label}]\n{part.get('text', '')}"
-                        break
             history.append({"role": "user", "content": content_array})
         else:
-            final_user_text = user_text
-            if len(history) == 1:
-                final_user_text = f"[SYSTEM: Act as {name_label}]\n{user_text}"
-            history.append({"role": "user", "content": final_user_text})
+            history.append({"role": "user", "content": user_text})
         
         # 2. MCP & Model Routing
         all_tools = await mcp_manager.get_all_tools()
