@@ -159,8 +159,9 @@ class LiteRouter:
         system_msg = messages[0] if messages[0].get("role") == "system" else None
         
         # Slicing the sub-list (excluding system) if too long
+        msgs_list = list(messages)
         start_idx = 1 if system_msg else 0
-        payload = messages[start_idx:]
+        payload = msgs_list[start_idx:]
         if len(payload) > 40:
             payload = payload[-40:]
             
@@ -781,14 +782,15 @@ class LiteRouter:
                 config = _gtypes.EmbedContentConfig(output_dimensionality=1536)
 
                 # Run synchronous SDK call in a thread pool
-                result = await asyncio.get_event_loop().run_in_executor(  # type: ignore[arg-type]
-                    None,
-                    lambda: client.models.embed_content(
-                        model="gemini-embedding-2-preview",
-                        contents=[content],
-                        config=config
-                    )
+                from functools import partial
+                loop = asyncio.get_event_loop()
+                fn = partial(
+                    client.models.embed_content,
+                    model="gemini-embedding-2-preview",
+                    contents=[content],
+                    config=config
                 )
+                result = await loop.run_in_executor(None, fn)
                 vector = list(result.embeddings[0].values)
                 logger.info(f"Multimodal embedding generated (parts={len(parts)}, dim={len(vector)})")
                 return vector
