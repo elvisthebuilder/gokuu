@@ -1530,8 +1530,14 @@ class GokuAgent:
                             # 1. Format history for LLM
                             hist_text = "\n".join([f"{h.get('metadata', {}).get('sender', 'Unknown')}: {h.get('text', '')}" for h in history])
                             
-                            # 2. Call LLM to summarize
-                            summary_prompt = "Summarize the following conversation in concise bullet points. Focus on key topics, questions, and decisions. Return ONLY the bullet points."
+                            # Retrieve active persona text to inject into the summarizer
+                            custom_persona_text = personality_manager.get_personality_text(active_persona)
+                            persona_instruction = f"IDENTITY: You are {active_persona.upper().replace('_', ' ')}." 
+                            if custom_persona_text:
+                                persona_instruction += f"\nYour behavior is governed by these instructions:\n{custom_persona_text}"
+                                
+                            # 2. Call LLM to summarize WITH PERSONA
+                            summary_prompt = f"{persona_instruction}\n\nYour current internal task is to act as a summarization assistant. Summarize the following conversation in concise bullet points. Focus on key topics, questions, and decisions. Maintain your persona's tone if applicable, but keep it concise. Return ONLY the bullet points."
                             try:
                                 yield {"type": "thought", "content": f"Summarizing {len(history)} messages for {target}..."}
                                 response = await router.get_response(
@@ -1541,7 +1547,9 @@ class GokuAgent:
                                 )
                                 if response.choices:
                                     summary = response.choices[0].message.content.strip() # type: ignore
-                                    result = {"status": "success", "summary": summary, "jid": target_jid}
+                                    # Wrap the tool result so the main loop doesn't get confused
+                                    protected_summary = f"[SYSTEM_TOOL_DATA: Below is the requested summary. Read this context, then reply to the user naturally IN CHARACTER. Do NOT break character to announce you read it.]\n\n{summary}"
+                                    result = {"status": "success", "summary": protected_summary, "jid": target_jid}
                                 else:
                                     result = {"status": "error", "message": "LLM failed to generate summary."}
                             except Exception as e:
@@ -1595,7 +1603,8 @@ class GokuAgent:
                         if not formatted_history:
                             result = {"status": "success", "message": f"I checked the history for {target} ({target_jid}), but it appears to be empty or hasn't been synced to my isolated group memory yet.", "history": []}
                         else:
-                            result = {"status": "success", "history": formatted_history, "jid": target_jid}
+                            protected_history = f"[SYSTEM_TOOL_DATA: Below is the raw group history for {target}. Read this context to understand what happened, then reply to the user naturally IN CHARACTER as your assigned persona. Do NOT break character to announce you read it or act as a generic AI.]\n\n" + "\n".join(formatted_history)
+                            result = {"status": "success", "history": protected_history, "jid": target_jid}
                     self.histories[session_id].append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps(result)})
                 elif tool_name == "get_chat_details":
                     target = tool_args.get("target")
@@ -1765,23 +1774,7 @@ class GokuAgent:
                         elif tool_name == "complete_implementation":
                             summary = tool_args.get("summary", "")
                             result = {"status": "success", "message": f"Implementation marked complete: {summary[:50]}..."}
-                        elif tool_name == "summarize_discussion":
-                            text_to_sum = tool_args.get("text", "")
-                            focus = tool_args.get("focus", "general points")
-                            if not text_to_sum:
-                                result = {"error": "No text provided for summarization."}
-                            else:
-                                yield {"type": "thought", "content": f"📝 Summarizing discussion with focus on: {focus}..."}
-                                sum_sys = f"You are a summarization assistant. Summarize the provided text into a concise list of bullet points. Focus purely on: {focus}. Return ONLY the summary."
-                                sum_resp = await router.get_response(
-                                    model=config_mgr.get_key("GOKU_MODEL", "gemini/gemini-2.5-flash"),
-                                    messages=[{"role": "system", "content": sum_sys}, {"role": "user", "content": text_to_sum}],
-                                    stream=False
-                                )
-                                if not sum_resp.choices:
-                                    result = {"error": "Failed to generate summary (empty response)."}
-                                else:
-                                    result = {"status": "success", "summary": sum_resp.choices[0].message.content.strip()} # type: ignore
+                        # Second generic summarize_discussion block intentionally removed (duplicate handler lacking context)
                         elif tool_name.startswith("openclaw_"):
                             skill_name = tool_name.replace("openclaw_agent_", "").replace("openclaw_skill_", "")
                             user_intent = tool_args.get("user_intent", "")
