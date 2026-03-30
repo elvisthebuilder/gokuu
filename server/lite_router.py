@@ -154,8 +154,17 @@ class LiteRouter:
 
     def _prepare_ollama_messages(self, messages: List[Dict[str, str]]) -> list:
         """Deep copy and convert tool arguments and multimodal content for Ollama."""
-        # 1. Trim history to prevent massive context bloat (Keep last 20)
-        trimmed_messages = messages[-20:] # type: ignore
+        # 1. Trim history to prevent massive context bloat while PRESERVING the system message
+        # Ensure the first message (system) is always kept if it exists
+        system_msg = messages[0] if messages[0].get("role") == "system" else None
+        
+        # Slicing the sub-list (excluding system) if too long
+        start_idx = 1 if system_msg else 0
+        payload = messages[start_idx:]
+        if len(payload) > 20:
+            payload = payload[-20:]
+            
+        trimmed_messages = ([system_msg] if system_msg else []) + payload
         ollama_messages = copy.deepcopy(trimmed_messages)
         
         total_msgs = len(cast(list, ollama_messages))
