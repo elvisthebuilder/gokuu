@@ -170,7 +170,7 @@ class LiteRouter:
         
         total_msgs = len(cast(list, ollama_messages))
         for i, msg in enumerate(cast(list, ollama_messages)):
-            # 2. Handle tool parsing
+            # 2. Handle tool parsing & role flattening
             if "tool_calls" in msg:
                 for tc in msg["tool_calls"]:
                     func = tc.get("function", {})
@@ -183,6 +183,12 @@ class LiteRouter:
                             # Fallback to an empty object if the LLM generated malformed JSON
                             logger.debug(f"Failed to parse tool argument JSON: {args}")
                             func["arguments"] = {}
+                            
+            if msg.get("role") == "tool":
+                logger.debug(f"Flattening 'tool' role to 'user' for Ollama compatibility: {msg.get('name')}")
+                msg["role"] = "user"
+                content = msg.get("content", "")
+                msg["content"] = f"[SYSTEM: The tool '{msg.get('name', 'unknown')}' was executed and returned the following result:\n\n{content}\n\nProceed based on this information.]"
                             
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")
