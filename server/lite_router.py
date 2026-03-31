@@ -197,11 +197,10 @@ class LiteRouter:
                 msg["role"] = "user"
                 content = msg.get("content", "")
                 
-                # Format as an Observation rather than a pseudo-system prompt
                 msg["content"] = (
                     f"Observation from Tool '{msg.get('name', 'unknown')}':\n"
                     f"### RESULT START ###\n{content}\n### RESULT END ###\n\n"
-                    f"Use this observation to continue your response naturally."
+                    f"CRITICAL INSTRUCTION: You now have the requested information. You MUST use this data to respond to the user's previous request right now. Do not ask how you can help, do not greet the user. Just provide the answer based on the observation."
                 )
 
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
