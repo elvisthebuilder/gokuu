@@ -1591,7 +1591,7 @@ class GokuAgent:
                         except: pass
                         
                         history = await memory.get_recent_messages(target_jid, limit=count, persona_name=active_persona)
-                        formatted_history = []
+                        formatted_history: List[str] = []
                         for h in history:
                             ts = h.get("timestamp", 0)
                             meta = h.get("metadata", {})
