@@ -881,7 +881,7 @@ class GokuAgent:
         if not str(user_text).strip():
             return
 
-        if all_attachments:
+        if photos:
             history.append({"role": "user", "content": content_array})
         else:
             history.append({"role": "user", "content": user_text})
