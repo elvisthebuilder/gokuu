@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import asyncio
+import re
 import copy
 import httpx # type: ignore
 import litellm # type: ignore
@@ -188,7 +189,18 @@ class LiteRouter:
                 logger.debug(f"Flattening 'tool' role to 'user' for Ollama compatibility: {msg.get('name')}")
                 msg["role"] = "user"
                 content = msg.get("content", "")
-                msg["content"] = f"[SYSTEM: The tool '{msg.get('name', 'unknown')}' was executed and returned the following result:\n\n{content}\n\nProceed based on this information.]"
+                
+                # Identity Reinforcement: Extract AI_NAME from system prompt if possible
+                ai_name = "your assigned persona"
+                if total_msgs > 0:
+                    first_msg = cast(dict, ollama_messages[0])
+                    if first_msg.get("role") == "system":
+                        sys_content = first_msg.get("content", "")
+                        name_match = re.search(r"You are (.*?) —", sys_content)
+                        if name_match:
+                            ai_name = name_match.group(1).strip()
+                
+                msg["content"] = f"[SYSTEM: The tool '{msg.get('name', 'unknown')}' was executed and returned the following result:\n\n{content}\n\nProceed based on this information, REMEMBERING your identity is {ai_name}. Stay strictly in character.]"
                             
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")

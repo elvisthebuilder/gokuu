@@ -36,11 +36,9 @@ class GokuAgent:
         self._skill_definitions: Optional[List[Dict[str, Any]]] = None
         self._last_skill_refresh: float = 0.0
         self.system_prompt = (
-            "You are {AI_NAME} — a high-performance AI terminal agent built for precise execution, "
-            "intelligent planning, and resilient problem solving.\n\n"
-
-            "You operate as an autonomous collaborator whose goal is to complete user objectives "
-            "efficiently, safely, and with minimal user effort.\n\n"
+            "You are {AI_NAME}. You operate as an elite technical collaborator for precise "
+            "execution, intelligent planning, and resilient system management. "
+            "Your priority is to fulfill user objectives autonomously with extreme functional depth.\n\n"
 
             "━━━━━━━━━━━━━━━━━━\n"
             "CORE OPERATING PRINCIPLES\n"
@@ -1734,15 +1732,15 @@ class GokuAgent:
                         elif tool_name == "submit_to_audit":
                             report = tool_args.get("report", "")
                             from server.job_tracker import job_tracker # type: ignore
-                            job_id = f"job_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            job_id = f"job_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
                             job_tracker.create_job(job_id, "audit", {"report": report})
-                            asyncio.create_task(self.run_subagent_background("department_audit", "Review this report.", report, source, session_id))
+                            asyncio.create_task(self.run_subagent_background("department_audit", "Review this report.", report, source, session_id, persona_name=assigned_persona_name))
                             result = {"status": "success", "message": f"Report submitted to Audit. Job ID: {job_id}"}
                         elif tool_name == "request_user_approval":
                             audit_report = tool_args.get("audit_report", "")
                             from server.job_tracker import job_tracker # type: ignore
                             # In a real flow, we'd pass the actual job ID here. For now, we create a new approval job.
-                            job_id = f"approval_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            job_id = f"approval_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
                             job_tracker.create_job(job_id, "implement", {"plan": audit_report})
                             job_tracker.update_job_status(job_id, "AWAITING_APPROVAL")
                             result = {"status": "success", "message": "Approval requested. Stopping execution until user approves."}
@@ -1766,7 +1764,8 @@ class GokuAgent:
                                     "Execute the approved plan.", 
                                     str(job.get("payload", {})), 
                                     source, 
-                                    job_id
+                                    job_id,
+                                    persona_name=assigned_persona_name
                                 ))
                                 result = {"status": "success", "message": f"Job {job_id} dispatched to the Implementer."}
                             else:
@@ -1780,7 +1779,7 @@ class GokuAgent:
                             user_intent = tool_args.get("user_intent", "")
                             ingestor = OpenClawIngestor(os.getcwd())
                             skill_info = next((ingestor.parse_skill(m["name"], m["path"]) for m in ingestor.list_skills() if m["name"] == skill_name), {})
-                            asyncio.create_task(self.run_subagent_background(skill_name, skill_info.get("instructions", ""), user_intent, source, session_id))
+                            asyncio.create_task(self.run_subagent_background(skill_name, skill_info.get("instructions", ""), user_intent, source, session_id, persona_name=assigned_persona_name))
                             result = {"status": "dispatched", "message": f"@{skill_name} is working in background."}
                         else:
                             try:
@@ -1818,9 +1817,11 @@ class GokuAgent:
             persona_name=mem_persona,
         )
 
-    async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default"):
+    async def run_subagent_background(self, skill_name: str, instructions: str, user_intent: str, source: str, session_id: str = "default", persona_name: str = "default"):
         try:
-            logger.info(f"Sub-agent start: @{skill_name}")
+            logger.info(f"Sub-agent start: @{skill_name} with persona: {persona_name}")
+            # Ensure the persona is mapped for the sub-agent's execution turn
+            personality_manager.set_mapping(f"subagent:{session_id}", persona_name)
             # Inject Lessons Learned if available
             lessons_dir = os.path.join(os.getcwd(), "agents", skill_name, "lessons")
             lessons_list: List[str] = []
