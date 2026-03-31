@@ -168,8 +168,18 @@ class LiteRouter:
             
         trimmed_messages = ([system_msg] if system_msg else []) + payload
         ollama_messages = copy.deepcopy(trimmed_messages)
-        
         total_msgs = len(cast(list, ollama_messages))
+
+        # Identity Extraction (Pre-scan for reinforcement)
+        ai_name = "your assigned persona"
+        if total_msgs > 0:
+            first_msg = cast(dict, ollama_messages[0])
+            if first_msg.get("role") == "system":
+                sys_content = first_msg.get("content", "")
+                name_match = re.search(r"(?:IDENTITY: )?You are (.+?)(?:\.\s|\. |\.\\n| —|\n)", sys_content)
+                if name_match:
+                    ai_name = name_match.group(1).strip()
+
         for i, msg in enumerate(cast(list, ollama_messages)):
             # 2. Handle tool parsing & role flattening
             if "tool_calls" in msg:
@@ -189,21 +199,23 @@ class LiteRouter:
                 logger.debug(f"Flattening 'tool' role to 'user' for Ollama compatibility: {msg.get('name')}")
                 msg["role"] = "user"
                 content = msg.get("content", "")
-                
-                # Identity Reinforcement: Extract AI_NAME from system prompt if possible
-                ai_name = "your assigned persona"
-                if total_msgs > 0:
-                    first_msg = cast(dict, ollama_messages[0])
-                    if first_msg.get("role") == "system":
-                        sys_content = first_msg.get("content", "")
-                        name_match = re.search(r"You are (.*?) —", sys_content)
-                        if name_match:
-                            ai_name = name_match.group(1).strip()
-                
                 msg["content"] = f"[SYSTEM: The tool '{msg.get('name', 'unknown')}' was executed and returned the following result:\n\n{content}\n\nProceed based on this information, REMEMBERING your identity is {ai_name}. Stay strictly in character.]"
-                            
+            
+            # Identity Pinning: Prepend identity to the LATEST user message to keep context fresh
+            if i == total_msgs - 1 and msg.get("role") == "user" and ai_name != "your assigned persona":
+                user_content = msg.get("content", "")
+                if isinstance(user_content, str):
+                    msg["content"] = f"[IDENTITY: {ai_name}]\n{user_content}"
+                elif isinstance(user_content, list):
+                    # Prepend to the first text chunk if it's a list
+                    for chunk in user_content:
+                        if chunk.get("type") == "text":
+                            chunk["text"] = f"[IDENTITY: {ai_name}]\n{chunk.get('text', '')}"
+                            break
+
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")
+
             
             # PURGE OLD IMAGE DATA: Only keep images for the last 2 messages (current turn)
             # This drastically reduces request size while keeping conversation context.
