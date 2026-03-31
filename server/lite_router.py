@@ -171,14 +171,11 @@ class LiteRouter:
         total_msgs = len(cast(list, ollama_messages))
 
         # Identity Extraction (Pre-scan for reinforcement)
-        ai_name = "your assigned persona"
+        system_prompt = None
         if total_msgs > 0:
             first_msg = cast(dict, ollama_messages[0])
             if first_msg.get("role") == "system":
-                sys_content = first_msg.get("content", "")
-                name_match = re.search(r"(?:IDENTITY: )?You are (.+?)(?:\.\s|\. |\.\\n| —|\n)", sys_content)
-                if name_match:
-                    ai_name = name_match.group(1).strip()
+                system_prompt = first_msg
 
         for i, msg in enumerate(cast(list, ollama_messages)):
             # 2. Handle tool parsing & role flattening
@@ -199,22 +196,27 @@ class LiteRouter:
                 logger.debug(f"Flattening 'tool' role to 'user' for Ollama compatibility: {msg.get('name')}")
                 msg["role"] = "user"
                 content = msg.get("content", "")
-                msg["content"] = f"[SYSTEM: The tool '{msg.get('name', 'unknown')}' was executed and returned the following result:\n\n{content}\n\nProceed based on this information, REMEMBERING your identity is {ai_name}. Stay strictly in character.]"
-            
-            # Identity Pinning: Prepend identity to the LATEST user message to keep context fresh
-            if i == total_msgs - 1 and msg.get("role") == "user" and ai_name != "your assigned persona":
-                user_content = msg.get("content", "")
-                if isinstance(user_content, str):
-                    msg["content"] = f"[IDENTITY: {ai_name}]\n{user_content}"
-                elif isinstance(user_content, list):
-                    # Prepend to the first text chunk if it's a list
-                    for chunk in user_content:
-                        if chunk.get("type") == "text":
-                            chunk["text"] = f"[IDENTITY: {ai_name}]\n{chunk.get('text', '')}"
-                            break
+                
+                # Format as an Observation rather than a pseudo-system prompt
+                msg["content"] = (
+                    f"Observation from Tool '{msg.get('name', 'unknown')}':\n"
+                    f"### RESULT START ###\n{content}\n### RESULT END ###\n\n"
+                    f"Use this observation to continue your response naturally."
+                )
 
             # 3. Handle Multimodal Vision format (OpenAI -> Ollama translation)
             content = msg.get("content")
+
+        # 4. Dynamic Context Anchoring: Local models often lose system prompts in long tool sequences.
+        # We re-inject the system prompt right before the final user/tool message.
+        if system_prompt and total_msgs >= 3:
+            # Find the last message that requires a response (usually a user message)
+            for i in range(len(ollama_messages) - 1, -1, -1):
+                if ollama_messages[i].get("role") == "user":
+                    # Re-inject system prompt right before this message
+                    ollama_messages.insert(i, system_prompt)
+                    break
+
 
             
             # PURGE OLD IMAGE DATA: Only keep images for the last 2 messages (current turn)

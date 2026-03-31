@@ -1377,7 +1377,7 @@ class GokuAgent:
                         yield {"type": "message", "role": "agent", "content": clean_content}
                         break
                     
-                    self.histories[session_id].append({"role": "user", "content": "[SYSTEM: Proceed with tool call NOW.]"})
+                    self.histories[session_id].append({"role": "user", "content": "Observation: You did not take a concrete action or reply completely. Please continue your task."})
                     continue
             else:
                 loop_data["narration_retries"] = 0
@@ -1390,7 +1390,7 @@ class GokuAgent:
                 
                 # Check for questions before tools
                 if "?" in cast(Any, clean_content.strip())[-5:] and len(clean_content) < 400:
-                    self.histories[session_id].append({"role": "user", "content": "[SYSTEM: Waiting for user answer to question.]"})
+                    self.histories[session_id].append({"role": "user", "content": "Observation: Message sent to user. Waiting for their reply."})
                     break
 
             # Execute Tools
@@ -1546,9 +1546,8 @@ class GokuAgent:
                                 )
                                 if response.choices:
                                     summary = response.choices[0].message.content.strip() # type: ignore
-                                    # Wrap the tool result so the main loop doesn't get confused
-                                    protected_summary = f"[SYSTEM_TOOL_DATA: Below is the requested summary. Read this context, then reply to the user naturally IN CHARACTER. Do NOT break character to announce you read it.]\n\n{summary}"
-                                    result = {"status": "success", "summary": protected_summary, "jid": target_jid}
+                                    # Send raw summary; lite_router will wrap it as an Observation
+                                    result = {"status": "success", "summary": summary, "jid": target_jid}
                                 else:
                                     result = {"status": "error", "message": "LLM failed to generate summary."}
                             except Exception as e:
