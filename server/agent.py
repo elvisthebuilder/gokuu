@@ -769,7 +769,10 @@ class GokuAgent:
         custom_persona_text = personality_manager.get_personality_text(assigned_persona_name)
         
         # Prepare the base name and instructions
-        name_label = assigned_persona_name.upper().replace("_", " ")
+        if assigned_persona_name == GOKU_DEFAULT_PERSONA:
+            name_label = "CORE"
+        else:
+            name_label = assigned_persona_name.upper().replace("_", " ")
         if custom_persona_text:
             # Identity Injection: Explicitly tell the AI its name and role in the system prompt
             # We use a very strict header to lock the model into this persona
@@ -1531,7 +1534,8 @@ class GokuAgent:
                             
                             # Retrieve active persona text to inject into the summarizer
                             custom_persona_text = personality_manager.get_personality_text(active_persona)
-                            persona_instruction = f"IDENTITY: You are {active_persona.upper().replace('_', ' ')}." 
+                            prompt_name = "CORE" if active_persona == GOKU_DEFAULT_PERSONA else active_persona.upper().replace("_", " ")
+                            persona_instruction = f"IDENTITY: You are {prompt_name}." 
                             if custom_persona_text:
                                 persona_instruction += f"\nYour behavior is governed by these instructions:\n{custom_persona_text}"
                                 
