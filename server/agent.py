@@ -12,6 +12,7 @@ import hashlib # type: ignore
 from PIL import Image # type: ignore
 import io
 import pdfplumber # type: ignore
+from server.self_health import check_self_integrity, print_safety_summary # type: ignore
 MAX_IMAGE_DIMENSION = 800
 from typing import List, Dict, Any, AsyncGenerator, cast, Optional, Callable, Awaitable
 from types import SimpleNamespace
@@ -435,6 +436,13 @@ class GokuAgent:
             react_fn: An optional asynchronous function to send a reaction to the user's message.
             is_group: Whether the message is from a group chat.
         """
+        # Self-Integrity Check — Prevent self-crush
+        integrity = check_self_integrity()
+        if not integrity["integrity_ok"]:
+            logger.error(f"Self-integrity check failed! Aborting.")
+            yield {"type": "message", "role": "agent", "content": "\u26a0\ufe0f **Self-Integrity Check Failed**\n\nI cannot proceed because the agent core has detected a mismatch. Please run `python -m server.atomic_updater rollback` or contact support.\n\n```json\" + json.dumps(integrity, indent=2) + "\n```"}
+            return
+        
         self._trim_history(session_id)
         
         # --- Hallucination Guard ---
