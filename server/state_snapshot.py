@@ -344,7 +344,7 @@ def auto_rollback_if_failed(error: Exception) -> bool:
     result = restore_snapshot(snapshot_id)
     
     if not result["success"]:
-        logger.critical(f"Rollback failed: {result['errors']}")
+        logger.critical(f"Rollback failed: {result.get('errors', 'Unknown')}")
         return False
     
     # Restore Git state
