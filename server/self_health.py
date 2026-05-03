@@ -156,7 +156,7 @@ def check_self_integrity() -> Dict[str, Any]:
         Path(__file__).parent / "agent.py",
         Path(__file__).parent / "gateway.py",
         Path(__file__).parent / "config_manager.py",
-        Path(__file__).parent.parent / "main.py",
+        Path(__file__).parent / "main.py",
     ]
     
     for f in critical:

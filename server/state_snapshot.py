@@ -302,7 +302,7 @@ def post_modify_verify() -> bool:
     critical_files = [
         Path(__file__).parent / "agent.py",
         Path(__file__).parent / "gateway.py",
-        Path(__file__).parent.parent / "main.py",
+        Path(__file__).parent / "main.py",
     ]
     
     for f in critical_files:
