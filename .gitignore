@@ -32,3 +32,4 @@ uploads/
 *session.db
 persona/
 personalities/
+server/whatsapp_session.db
