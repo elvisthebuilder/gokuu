@@ -160,7 +160,13 @@ def restore_snapshot(snapshot_id: str, dry_run: bool = False) -> Dict[str, Any]:
         Status dict with success, errors, and files restored
     """
     # Find snapshot dir
-    matches = list(SNAPSHOT_DIR.glob(f"snapshot_*{snapshot_id}*"))
+    # Exact match first
+    exact_path = SNAPSHOT_DIR / snapshot_id
+    if exact_path.is_dir():
+        matches = [exact_path]
+    else:
+        # Fallback to partial match
+        matches = list(SNAPSHOT_DIR.glob(f"snapshot_*{snapshot_id}*"))
     if not matches:
         return {"success": False, "error": f"Snapshot not found: {snapshot_id}"}
     
