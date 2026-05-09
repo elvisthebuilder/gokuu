@@ -356,7 +356,8 @@ class GokuAgent:
                 "• Use _italics_ for secondary notes or sub-labels.\n"
                 "• Use `inline code` for filenames or single commands.\n"
                 "• Use triple backticks (```) for code blocks — these are natively scrollable.\n"
-                "• USE TABLES freely — they will be auto-formatted into premium monospaced blocks.\n"
+                "• NEVER use markdown tables (│ col1 │ col2 │) — they do NOT render on WhatsApp. Use bullet lists instead.\n"
+                "• NEVER use horizontal line separators (---, ===, ━━━, ———) — they appear as raw characters.\n"
                 "• Keep layout clean and vertical for mobile ease.\n\n"
             )
         elif source == "telegram":
@@ -369,7 +370,8 @@ class GokuAgent:
                 "• Use bullet points (- or •) for lists — they render cleanly on mobile.\n"
                 "• Use `inline code` for commands, file names, and technical terms.\n"
                 "• Use fenced code blocks (```) for code snippets — keep them short.\n"
-                "• USE TABLES freely — they will be auto-formatted into premium monospaced blocks.\n"
+                "• NEVER use markdown tables (│ col1 │ col2 │) — they do NOT render on Telegram. Use bullet lists instead.\n"
+                "• NEVER use horizontal line separators (---, ===, ━━━, ———) — they appear as raw characters on mobile.\n"
                 "• Use emoji as section labels (🔍, ✅, ⚠️, 💡) to improve scannability.\n"
                 "• Keep paragraphs short (2-3 sentences max) for mobile readability.\n"
                 "• AVOID deeply nested formatting or complex markdown structures.\n"
