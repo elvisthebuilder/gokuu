@@ -442,7 +442,7 @@ class GokuAgent:
         integrity = check_self_integrity()
         if not integrity["integrity_ok"]:
             logger.error(f"Self-integrity check failed! Aborting.")
-            yield {"type": "message", "role": "agent", "content": "\u26a0\ufe0f **Self-Integrity Check Failed**\n\nI cannot proceed because the agent core has detected a mismatch. Please run `python -m server.atomic_updater rollback` or contact support.\n\n```json\" + json.dumps(integrity, indent=2) + "\n```"}
+            yield {"type": "message", "role": "agent", "content": f"\u26a0\ufe0f **Self-Integrity Check Failed**\n\nI cannot proceed because the agent core has detected a mismatch. Please run `python -m server.atomic_updater rollback` or contact support.\n\n```json\n{json.dumps(integrity, indent=2)}\n```"}
             return
         
         self._trim_history(session_id)
